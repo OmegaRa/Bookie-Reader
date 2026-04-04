@@ -71,8 +71,8 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
 
         val format = book?.format?.lowercase() ?: ""
 
-        when {
-            format == "pdf" -> {
+        when (format) {
+            "pdf" -> {
                 val isPdfSupported = remember {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                         SdkExtensions.getExtensionVersion(Build.VERSION_CODES.S) >= 13
@@ -123,7 +123,7 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                     }
                 }
             }
-            format == "epub" -> {
+            "epub" -> {
                 var epubBook by remember { mutableStateOf<EpubBook?>(null) }
                 var htmlContent by remember { mutableStateOf<String?>(null) }
                 var error by remember { mutableStateOf<String?>(null) }
@@ -281,7 +281,7 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                     }
                 }
             }
-            format == "azw3" || format == "mobi" -> {
+            "azw3", "mobi" -> {
                 var htmlContent by remember { mutableStateOf<String?>(null) }
                 var error by remember { mutableStateOf<String?>(null) }
                 val parseError = stringResource(R.string.error_parsing_mobi)

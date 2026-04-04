@@ -13,13 +13,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.GridView
-import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
@@ -267,7 +267,7 @@ fun BookListScreen(
                         .background(colorScheme.surface, RoundedCornerShape(8.dp))
                 ) {
                     Icon(
-                        if (isGridView) Icons.Default.List else Icons.Default.GridView, 
+                        if (isGridView) Icons.AutoMirrored.Filled.List else Icons.Default.GridView,
                         contentDescription = stringResource(R.string.toggle_view), 
                         tint = colorScheme.onSurface.copy(alpha = 0.6f)
                     )

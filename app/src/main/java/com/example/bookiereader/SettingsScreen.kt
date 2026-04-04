@@ -29,7 +29,6 @@ import androidx.compose.ui.unit.sp
 fun SettingsScreen(viewModel: BookViewModel, onBack: () -> Unit) {
     val context = LocalContext.current
     val colorScheme = MaterialTheme.colorScheme
-    val accentColor = colorScheme.primary
 
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
@@ -105,10 +104,10 @@ fun SettingsScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                     Box(
                         modifier = Modifier
                             .size(40.dp)
-                            .background(accentColor.copy(alpha = 0.1f), RoundedCornerShape(8.dp)),
+                            .background(colorScheme.primary.copy(alpha = 0.1f), RoundedCornerShape(8.dp)),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(Icons.Default.FolderOpen, contentDescription = null, tint = accentColor)
+                        Icon(Icons.Default.FolderOpen, contentDescription = null, tint = colorScheme.primary)
                     }
                     
                     Column(
