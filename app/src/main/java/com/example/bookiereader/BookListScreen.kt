@@ -2,8 +2,9 @@ package com.example.bookiereader
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -85,6 +86,7 @@ fun BookListScreen(
     }
 
     val sortedBooks = viewModel.filteredBooks
+    val allSelected = sortedBooks.isNotEmpty() && selectedBooks.value.size == sortedBooks.size
 
     Scaffold(
         containerColor = colorScheme.background,
@@ -124,6 +126,18 @@ fun BookListScreen(
                 },
                 actions = {
                     if (isSelectionMode) {
+                        IconButton(onClick = {
+                            if (allSelected) {
+                                selectedBooks.value = emptySet()
+                            } else {
+                                selectedBooks.value = sortedBooks.map { it.id }.toSet()
+                            }
+                        }) {
+                            Icon(
+                                if (allSelected) Icons.Default.RadioButtonUnchecked else Icons.Default.CheckCircle,
+                                contentDescription = if (allSelected) "Deselect All" else "Select All"
+                            )
+                        }
                         IconButton(onClick = {
                             viewModel.deleteSelectedBooks(selectedBooks.value)
                             selectedBooks.value = emptySet()
@@ -356,6 +370,7 @@ fun BookListScreen(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun BookGridItem(
     book: Book,
@@ -381,13 +396,20 @@ fun BookGridItem(
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
             .background(if (isSelected) accentColor.copy(alpha = 0.2f) else colorScheme.surface)
-            .clickable { 
-                if (isSelectionMode) {
-                   onToggleSelection()
-                } else {
-                    viewModel.downloadAndOpenBook(context, book, onOpenBook) 
+            .combinedClickable(
+                onClick = {
+                    if (isSelectionMode) {
+                        onToggleSelection()
+                    } else {
+                        viewModel.downloadAndOpenBook(context, book, onOpenBook)
+                    }
+                },
+                onLongClick = {
+                    if (!isSelectionMode) {
+                        onToggleSelection()
+                    }
                 }
-            }
+            )
     ) {
         Box {
             AsyncImage(
@@ -487,6 +509,7 @@ fun BookGridItem(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun BookListItem(
     book: Book,
@@ -512,13 +535,20 @@ fun BookListItem(
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
             .background(if (isSelected) accentColor.copy(alpha = 0.2f) else colorScheme.surface)
-            .clickable { 
-                if (isSelectionMode) {
-                    onToggleSelection()
-                } else {
-                    viewModel.downloadAndOpenBook(context, book, onOpenBook)
+            .combinedClickable(
+                onClick = {
+                    if (isSelectionMode) {
+                        onToggleSelection()
+                    } else {
+                        viewModel.downloadAndOpenBook(context, book, onOpenBook)
+                    }
+                },
+                onLongClick = {
+                    if (!isSelectionMode) {
+                        onToggleSelection()
+                    }
                 }
-            }
+            )
             .padding(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {

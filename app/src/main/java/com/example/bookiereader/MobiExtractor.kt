@@ -13,8 +13,8 @@ object MobiExtractor {
             val numRecords = raf.readUnsignedShort()
             
             val recordOffsets = LongArray(numRecords)
-            for (i in 0 until numRecords) {
-                recordOffsets[i] = raf.readInt().toLong() and 0xFFFFFFFFL
+            for (_i in 0 until numRecords) {
+                recordOffsets[_i] = raf.readInt().toLong() and 0xFFFFFFFFL
                 raf.skipBytes(4) // Skip attributes and unique ID
             }
             
@@ -48,7 +48,11 @@ object MobiExtractor {
             raf.seek(mobiHeaderOffset + 242)
             val extraDataFlags = if (mobiHeaderLength >= 242 + 2) raf.readUnsignedShort() else 0
             
-            Log.d("MobiExtractor", "Compression: $compression, Records: $textRecordCount, Flags: $extraDataFlags, Encoding: $encoding")
+            // First Image Index at offset 108 in MOBI header
+            raf.seek(mobiHeaderOffset + 108)
+            val firstImageIndex = raf.readInt()
+            
+            Log.d("MobiExtractor", "Compression: $compression, Records: $textRecordCount, Flags: $extraDataFlags, Encoding: $encoding, FirstImageIndex: $firstImageIndex")
 
             val allBytes = mutableListOf<Byte>()
             
@@ -82,6 +86,35 @@ object MobiExtractor {
             }
 
             val text = String(allBytes.toByteArray(), charset)
+            
+            // Extract images
+            val images = mutableMapOf<Int, ByteArray>()
+            if (firstImageIndex != -1) {
+                for (idx in firstImageIndex until numRecords) {
+                    val offset = recordOffsets[idx]
+                    val nextOffset = if (idx + 1 < numRecords) recordOffsets[idx + 1] else file.length()
+                    val size = (nextOffset - offset).toInt()
+                    if (size <= 0) continue
+                    
+                    raf.seek(offset)
+                    val imgData = ByteArray(size)
+                    raf.read(imgData)
+                    
+                    // Check if it's actually an image (could be other resources)
+                    // Simple check for JPEG, PNG, GIF
+                    if (imgData.size > 4) {
+                        val isImage = (imgData[0] == 0xFF.toByte() && imgData[1] == 0xD8.toByte()) || // JPEG
+                                      (imgData[0] == 0x89.toByte() && imgData[1] == 'P'.code.toByte()) || // PNG
+                                      (imgData[0] == 'G'.code.toByte() && imgData[1] == 'I'.code.toByte()) // GIF
+                        
+                        if (isImage) {
+                            // index in map should be (idx - firstImageIndex + 1) to match recindex
+                            images[idx - firstImageIndex + 1] = imgData
+                        }
+                    }
+                }
+            }
+
             var series: String? = null
             var seriesIndex: Float? = null
 
@@ -96,7 +129,7 @@ object MobiExtractor {
                 if (String(exthId) == "EXTH") {
                     val exthLength = raf.readInt()
                     val recordCount = raf.readInt()
-                    for (i in 0 until recordCount) {
+                    for (_i in 0 until recordCount) {
                         if (raf.filePointer >= exthOffset + exthLength) break
                         val recordType = raf.readInt()
                         val recordLen = raf.readInt()
@@ -113,7 +146,7 @@ object MobiExtractor {
                 }
             }
 
-            return MobiData(text, series, seriesIndex)
+            return MobiData(text, series, seriesIndex, images)
         }
     }
 
@@ -160,7 +193,12 @@ object MobiExtractor {
     }
 }
 
-data class MobiData(val text: String, val series: String?, val seriesIndex: Float?)
+data class MobiData(
+    val text: String,
+    val series: String?,
+    val seriesIndex: Float?,
+    val images: Map<Int, ByteArray> = emptyMap()
+)
 
 object PalmDocDecompressor {
     fun decompress(input: ByteArray): ByteArray {
@@ -175,7 +213,7 @@ object PalmDocDecompressor {
                     output.add(0)
                 }
                 c in 1..8 -> { // Literal copy
-                    for (j in 0 until c) {
+                    for (_j in 0 until c) {
                         if (i < input.size) {
                             output.add(input[i])
                             i++
@@ -200,8 +238,8 @@ object PalmDocDecompressor {
                         
                         val start = output.size - distance
                         if (distance > 0) {
-                            for (j in 0 until length) {
-                                val pos = start + j
+                            for (_j in 0 until length) {
+                                val pos = start + _j
                                 if (pos >= 0 && pos < output.size) {
                                     output.add(output[pos])
                                 }

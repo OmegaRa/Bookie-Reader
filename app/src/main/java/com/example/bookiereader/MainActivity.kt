@@ -33,7 +33,6 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentType
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -59,6 +58,9 @@ class MainActivity : FragmentActivity() {
         splashScreen.setKeepOnScreenCondition { keepSplash }
 
         setContent {
+            LaunchedEffect(Unit) {
+                keepSplash = false
+            }
             val viewModel: BookViewModel = viewModel()
             val themeMode = viewModel.themeMode
             val darkTheme = when (themeMode) {

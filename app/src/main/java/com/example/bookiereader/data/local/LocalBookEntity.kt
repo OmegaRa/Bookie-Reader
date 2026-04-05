@@ -12,5 +12,6 @@ data class LocalBookEntity(
     val filePath: String,
     val series: String? = null,
     val seriesOrder: Double? = null,
-    val tags: String? = null // Stored as comma-separated string
+    val tags: String? = null, // Stored as comma-separated string
+    val lastPageIndex: Int = 0
 )

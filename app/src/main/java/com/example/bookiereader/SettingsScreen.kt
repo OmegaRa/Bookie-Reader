@@ -37,7 +37,7 @@ fun SettingsScreen(viewModel: BookViewModel, onBack: () -> Unit) {
         }
     )
 
-    var showThemeDialog by remember { mutableStateOf(false) }
+    val showThemeDialog = remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -70,7 +70,7 @@ fun SettingsScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                 title = stringResource(R.string.theme_label),
                 subtitle = viewModel.themeMode,
                 icon = Icons.Default.Palette,
-                onClick = { showThemeDialog = true }
+                onClick = { showThemeDialog.value = true }
             )
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -144,13 +144,13 @@ fun SettingsScreen(viewModel: BookViewModel, onBack: () -> Unit) {
         }
     }
 
-    if (showThemeDialog) {
+    if (showThemeDialog.value) {
         ThemeSelectionDialog(
             currentMode = viewModel.themeMode,
-            onDismiss = { showThemeDialog = false },
+            onDismiss = { showThemeDialog.value = false },
             onSelect = { mode ->
                 viewModel.updateThemeMode(mode)
-                showThemeDialog = false
+                showThemeDialog.value = false
             }
         )
     }
@@ -217,6 +217,7 @@ fun ThemeSelectionDialog(
 ) {
     val options = listOf(
         stringResource(R.string.theme_light) to "Light",
+        stringResource(R.string.theme_sepia) to "Sepia",
         stringResource(R.string.theme_dark) to "Dark",
         stringResource(R.string.theme_system) to "System"
     )

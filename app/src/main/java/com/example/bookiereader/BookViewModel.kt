@@ -3,6 +3,9 @@ package com.example.bookiereader
 import android.app.Application
 import android.content.Context
 import android.net.Uri
+import android.provider.OpenableColumns
+import android.util.Base64
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -16,10 +19,22 @@ import com.example.bookiereader.data.local.LocalBookEntity
 import com.example.bookiereader.network.ApiService
 import com.google.gson.GsonBuilder
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import nl.siegmann.epublib.epub.EpubReader
 import com.tom_roush.pdfbox.pdmodel.PDDocument
+import org.readium.r2.shared.publication.Link
+import org.readium.r2.shared.publication.Locator
+import org.readium.r2.shared.publication.Publication
+import org.readium.r2.streamer.PublicationOpener
+import org.readium.r2.streamer.parser.epub.EpubParser
+import org.readium.r2.shared.util.asset.Asset
+import org.readium.r2.shared.util.asset.AssetRetriever
+import org.readium.r2.shared.util.http.DefaultHttpClient
+import org.readium.r2.navigator.epub.EpubNavigatorFactory
+import com.google.gson.reflect.TypeToken
+import org.json.JSONObject
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
@@ -32,11 +47,53 @@ import retrofit2.converter.gson.GsonConverterFactory
 import java.io.File
 import java.io.FileOutputStream
 
+data class ReaderPage(val content: String, val basePath: String?)
+
+data class TocItem(
+    val title: String,
+    val href: String,
+    val level: Int = 0,
+    val pageIndex: Int = -1
+)
+
 class BookViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application
     private val prefs = application.getSharedPreferences("bookie_prefs", Context.MODE_PRIVATE)
     private val db = AppDatabase.getDatabase(application)
     private val localBookDao = db.localBookDao()
+
+    // Software-level encryption to allow for Android Backup while keeping data non-plain-text
+    private fun encrypt(value: String?): String? {
+        if (value == null) return null
+        return try {
+            val bytes = value.toByteArray(Charsets.UTF_8)
+            "enc:" + Base64.encodeToString(bytes, Base64.NO_WRAP)
+        } catch (_: Exception) {
+            value
+        }
+    }
+
+    private fun decrypt(value: String?): String? {
+        if (value == null) return null
+        if (!value.startsWith("enc:")) return value
+        return try {
+            val actualValue = value.substring(4)
+            val bytes = Base64.decode(actualValue, Base64.DEFAULT)
+            String(bytes, Charsets.UTF_8)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun saveCredentials(baseUrl: String, cookie: String) {
+        prefs.edit {
+            putString("base_url", encrypt(baseUrl))
+            putString("session_cookie", encrypt(cookie))
+        }
+    }
+
+    fun getSavedBaseUrl(): String? = decrypt(prefs.getString("base_url", null))
+    fun getSavedSessionCookie(): String? = decrypt(prefs.getString("session_cookie", null))
 
     var books by mutableStateOf<List<Book>>(emptyList())
         private set
@@ -50,36 +107,177 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
     var errorMessage by mutableStateOf<String?>(null)
         private set
 
-    var baseUrl by mutableStateOf(prefs.getString("base_url", "") ?: "")
+    var baseUrl by mutableStateOf(getSavedBaseUrl() ?: "")
         private set
 
     var okHttpClient: OkHttpClient? by mutableStateOf(null)
         private set
 
     var currentBookFile by mutableStateOf<File?>(null)
-        private set
-
     var currentBook by mutableStateOf<Book?>(null)
-        private set
+    
+    var readerPages by mutableStateOf<List<ReaderPage>>(emptyList())
+    var readerToc by mutableStateOf<List<TocItem>>(emptyList())
+    var isReaderLoading by mutableStateOf(false)
+    var readerError by mutableStateOf<String?>(null)
+    var currentPageIndex by mutableStateOf(0)
+    var currentProgression by mutableStateOf<Double?>(null)
 
-    var sortBy by mutableStateOf("Author")
-        private set
+    // New state for dynamic pagination
+    var chapterPageCounts by mutableStateOf<Map<Int, Int>>(emptyMap())
 
+    val totalPagesCount: Int
+        get() {
+            if (readerPages.isEmpty()) return 0
+            var total = 0
+            for (i in readerPages.indices) {
+                total += chapterPageCounts[i] ?: 1
+            }
+            return maxOf(1, total)
+        }
+
+    fun getChapterAndPage(globalIndex: Int): Pair<Int, Int> {
+        if (readerPages.isEmpty()) {
+            return 0 to 0
+        }
+        if (chapterPageCounts.isEmpty() || chapterPageCounts.size < readerPages.size) {
+            return globalIndex.coerceIn(0, readerPages.size - 1) to 0
+        }
+        var count = 0
+        for (i in 0 until readerPages.size) {
+            val pagesInChapter = chapterPageCounts[i] ?: 1
+            if (globalIndex < count + pagesInChapter) {
+                return i to (globalIndex - count)
+            }
+            count += pagesInChapter
+        }
+        return (readerPages.size - 1).coerceAtLeast(0) to 0
+    }
+
+    fun getGlobalIndex(chapterIndex: Int, pageInChapter: Int): Int {
+        if (readerPages.isEmpty()) return 0
+        val safeChapter = chapterIndex.coerceIn(0, readerPages.size - 1)
+        var count = 0
+        for (i in 0 until safeChapter) {
+            count += chapterPageCounts[i] ?: 1
+        }
+        val pagesInTarget = chapterPageCounts[safeChapter] ?: 1
+        return count + pageInChapter.coerceIn(0, pagesInTarget - 1)
+    }
+
+    fun updateChapterPageCount(chapterIndex: Int, count: Int) {
+        if (chapterPageCounts[chapterIndex] != count) {
+            chapterPageCounts = chapterPageCounts + (chapterIndex to count)
+        }
+    }
+    
+    // Settings state
+    var readerFontSize by mutableStateOf(prefs.getFloat("reader_font_size", 18f))
     var themeMode by mutableStateOf(prefs.getString("theme_mode", "System") ?: "System")
-        private set
-
+    var readerTheme by mutableStateOf(prefs.getString("theme_mode", "System") ?: "System")
+    var sortBy by mutableStateOf(prefs.getString("sort_by", "Author") ?: "Author")
     var searchQuery by mutableStateOf("")
-        private set
-
     var selectedTag by mutableStateOf<String?>(null)
-        private set
 
     val allTags: List<String>
-        get() {
-            val serverTags = books.flatMap { it.tags ?: emptyList() }
-            val localTags = localBooks.flatMap { it.tags ?: emptyList() }
-            return (serverTags + localTags).distinct().sorted()
+        get() = (books + localBooks).flatMap { it.tags ?: emptyList() }.distinct().sorted()
+
+    fun deleteSelectedBooks(bookIds: Set<Int>) {
+        viewModelScope.launch(Dispatchers.IO) {
+            bookIds.forEach { id ->
+                val book = (books + localBooks).find { it.id == id }
+                if (book != null) {
+                    deleteBook(book)
+                }
+            }
         }
+    }
+
+    fun updateThemeMode(mode: String) {
+        themeMode = mode
+        readerTheme = mode
+        prefs.edit { putString("theme_mode", mode) }
+    }
+
+    var currentEpubBook: nl.siegmann.epublib.domain.Book? = null
+        private set
+    var currentPublication: Publication? by mutableStateOf(null)
+        private set
+    var epubNavigatorFactory: EpubNavigatorFactory? by mutableStateOf(null)
+        private set
+
+    private fun flattenToc(links: List<Link>, level: Int = 0): List<TocItem> {
+        val result = mutableListOf<TocItem>()
+        for (link in links) {
+            result.add(TocItem(link.title ?: "Untitled", link.href.toString(), level))
+            if (link.children.isNotEmpty()) {
+                result.addAll(flattenToc(link.children, level + 1))
+            }
+        }
+        return result
+    }
+
+    // Bookmarks state
+    var bookmarks by mutableStateOf<List<Locator>>(emptyList())
+        private set
+
+    fun addBookmark(locator: Locator) {
+        if (!bookmarks.contains(locator)) {
+            bookmarks = bookmarks + locator
+            saveBookmarks()
+        }
+    }
+
+    fun removeBookmark(locator: Locator) {
+        bookmarks = bookmarks.filter { it != locator }
+        saveBookmarks()
+    }
+
+    fun saveReadingProgress(locator: Locator) {
+        val bookId = currentBook?.id ?: return
+        prefs.edit {
+            putString("last_locator_$bookId", locator.toJSON().toString())
+        }
+    }
+
+    fun getLastLocator(bookId: Int): Locator? {
+        val json = prefs.getString("last_locator_$bookId", null) ?: return null
+        return try {
+            Locator.fromJSON(JSONObject(json))
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun saveBookmarks() {
+        val bookId = currentBook?.id ?: return
+        val json = GsonBuilder().create().toJson(bookmarks.map { it.toJSON().toString() })
+        prefs.edit {
+            putString("bookmarks_$bookId", json)
+        }
+    }
+
+    private fun loadBookmarks(bookId: Int) {
+        val json = prefs.getString("bookmarks_$bookId", null)
+        if (json != null) {
+            try {
+                val listType = object : TypeToken<List<String>>() {}.type
+                val stringList: List<String> = GsonBuilder().create().fromJson(json, listType)
+                bookmarks = stringList.mapNotNull { Locator.fromJSON(JSONObject(it)) }
+            } catch (_: Exception) {
+                Log.e("BookViewModel", "Error loading bookmarks")
+                bookmarks = emptyList()
+            }
+        } else {
+            bookmarks = emptyList()
+        }
+    }
+
+    var currentMobiData: MobiData? = null
+        private set
+    private var preparationJob: Job? = null
+    private var lastPreparedParams: Any? = null
+    private var hrefToPageMap = mapOf<String, Int>()
 
     val filteredBooks: List<Book>
         get() {
@@ -107,10 +305,15 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         loadLocalBooks()
-        val savedUrl = prefs.getString("base_url", null)
-        val savedSession = prefs.getString("session_cookie", null)
-        if (savedUrl != null && savedSession != null) {
-            setupClientAndFetch(savedUrl, savedSession)
+        val savedUrl = getSavedBaseUrl()
+        val savedSession = getSavedSessionCookie()
+        if (!savedUrl.isNullOrBlank() && !savedSession.isNullOrBlank()) {
+            try {
+                setupClientAndFetch(savedUrl, savedSession)
+            } catch (_: Exception) {
+                Log.e("BookViewModel", "Failed to auto-connect")
+                errorMessage = "Failed to reconnect"
+            }
         }
     }
 
@@ -134,27 +337,55 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun refreshBooks() {
-        val savedUrl = prefs.getString("base_url", null)
-        val savedSession = prefs.getString("session_cookie", null)
+        val savedUrl = getSavedBaseUrl()
+        val savedSession = getSavedSessionCookie()
         if (savedUrl != null && savedSession != null) {
             setupClientAndFetch(savedUrl, savedSession)
         }
     }
 
+    private fun formatBaseUrl(url: String): String {
+        var formatted = url.trim()
+        if (formatted.isEmpty()) return ""
+        
+        if (!formatted.startsWith("http://") && !formatted.startsWith("https://")) {
+            formatted = "https://$formatted"
+        }
+        
+        if (!formatted.endsWith("/")) {
+            formatted += "/"
+        }
+        
+        if (!formatted.contains("/api/")) {
+            formatted += "api/"
+        }
+        
+        while (formatted.endsWith("//")) {
+            formatted = formatted.substring(0, formatted.length - 1)
+        }
+        if (!formatted.endsWith("/")) {
+            formatted += "/"
+        }
+
+        return formatted
+    }
+
     private fun setupClientAndFetch(url: String, sessionCookie: String?) {
-        val formattedUrl = if (url.endsWith("/")) url else "$url/"
+        val formattedUrl = formatBaseUrl(url)
+        val httpUrl = formattedUrl.toHttpUrlOrNull()
+        if (httpUrl == null) {
+            Log.e("BookViewModel", "Invalid URL: $formattedUrl")
+            return
+        }
         baseUrl = formattedUrl
         
         val cookieJar = object : CookieJar {
             private val cookieStore = mutableMapOf<String, List<Cookie>>()
             init {
                 if (sessionCookie != null) {
-                    val httpUrl = formattedUrl.toHttpUrlOrNull()
-                    if (httpUrl != null) {
-                        val cookie = Cookie.parse(httpUrl, sessionCookie)
-                        if (cookie != null) {
-                            cookieStore[httpUrl.host] = listOf(cookie)
-                        }
+                    val cookie = Cookie.parse(httpUrl, sessionCookie)
+                    if (cookie != null) {
+                        cookieStore[httpUrl.host] = listOf(cookie)
                     }
                 }
             }
@@ -162,7 +393,7 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
             override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
                 cookieStore[url.host] = cookies
                 cookies.find { it.name == "session" }?.let { session ->
-                    prefs.edit { putString("session_cookie", session.toString()) }
+                    saveCredentials(baseUrl, session.toString())
                 }
             }
 
@@ -213,7 +444,6 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                 
                 books = allFetchedBooks
             } catch (_: Exception) {
-                // If fetching fails, clear prefs to force relogin
                 prefs.edit { clear() }
                 errorMessage = app.getString(R.string.session_expired)
             } finally {
@@ -223,7 +453,7 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun connect(url: String, username: String, password: String, onSuccess: () -> Unit) {
-        val formattedUrl = if (url.endsWith("/")) url else "$url/"
+        val formattedUrl = formatBaseUrl(url)
         baseUrl = formattedUrl
         
         viewModelScope.launch {
@@ -235,7 +465,7 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                     override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
                         cookieStore[url.host] = cookies
                         cookies.find { it.name == "session" }?.let { session ->
-                            prefs.edit { putString("session_cookie", session.toString()) }
+                            saveCredentials(baseUrl, session.toString())
                         }
                     }
                     override fun loadForRequest(url: HttpUrl): List<Cookie> = cookieStore[url.host] ?: emptyList()
@@ -252,7 +482,7 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                 val loginResponse = service.login(LoginRequest(username, password))
                 
                 if (loginResponse.isSuccessful) {
-                    prefs.edit { putString("base_url", formattedUrl) }
+                    saveCredentials(formattedUrl, "") // Initial save, cookie is saved via CookieJar
                     okHttpClient = client
                     
                     var currentPage = 1
@@ -271,8 +501,8 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                 } else {
                     errorMessage = app.getString(R.string.login_failed, loginResponse.code())
                 }
-            } catch (e: Exception) {
-                errorMessage = app.getString(R.string.failed_to_connect, e.localizedMessage)
+            } catch (_: Exception) {
+                errorMessage = app.getString(R.string.failed_to_connect)
             } finally {
                 isLoading = false
             }
@@ -282,7 +512,6 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
     fun logout(onLoggedOut: () -> Unit) {
         prefs.edit { clear() }
         books = emptyList()
-        // We keep localBooks even on logout
         okHttpClient = null
         baseUrl = ""
         sortBy = "Author"
@@ -291,6 +520,7 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setSortOrder(order: String) {
         sortBy = order
+        prefs.edit { putString("sort_by", order) }
     }
 
     fun updateSearchQuery(query: String) {
@@ -301,13 +531,300 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
         selectedTag = if (tag == "All" || tag == "None") null else tag
     }
 
-    fun updateThemeMode(mode: String) {
-        themeMode = mode
-        prefs.edit { putString("theme_mode", mode) }
+    fun updateReaderTheme(theme: String) {
+        readerTheme = theme
+        themeMode = theme
+        prefs.edit { putString("theme_mode", theme) }
+    }
+
+    fun updateReaderFontSize(delta: Int) {
+        readerFontSize = (readerFontSize + delta).coerceIn(12f, 40f)
+        prefs.edit { putFloat("reader_font_size", readerFontSize) }
+    }
+
+    private fun colorToHex(color: Int): String {
+        return String.format("#%06X", 0xFFFFFF and color)
+    }
+
+    fun prepareReader(file: File, bgColor: Int? = null, textColor: Int? = null) {
+        val currentParams = listOf(file.absolutePath, readerFontSize, readerTheme, bgColor, textColor)
+        if (lastPreparedParams == currentParams && readerPages.isNotEmpty()) return
+        
+        preparationJob?.cancel()
+        preparationJob = viewModelScope.launch(Dispatchers.IO) {
+            isReaderLoading = true
+            readerError = null
+            try {
+                val format = file.extension.lowercase()
+                val bgHex = if (bgColor != null) colorToHex(bgColor) else if (readerTheme == "Dark") "#121212" else "#FFFFFF"
+                val textHex = if (textColor != null) colorToHex(textColor) else if (readerTheme == "Dark") "#E0E0E0" else "#1A1A1A"
+                
+                val result: Pair<Any, List<ReaderPage>> = withContext(Dispatchers.IO) {
+                    if (format == "epub") {
+                        val assetRetriever = AssetRetriever(app.contentResolver, DefaultHttpClient())
+                        val publicationOpener = PublicationOpener(
+                            publicationParser = EpubParser(),
+                        )
+                        val publication = try {
+                            val asset: Asset? = assetRetriever.retrieve(file).getOrNull()
+                            if (asset != null) {
+                                publicationOpener.open(asset, allowUserInteraction = false).getOrNull()
+                            } else {
+                                null
+                            }
+                        } catch (_: Exception) {
+                            Log.e("BookViewModel", "Error opening EPUB with Readium")
+                            null
+                        }
+
+                        if (publication != null) {
+                            withContext(Dispatchers.Main) {
+                                currentPublication = publication
+                                epubNavigatorFactory = EpubNavigatorFactory(publication)
+                                readerToc = flattenToc(publication.tableOfContents)
+                                loadBookmarks(currentBook?.id ?: -1)
+                            }
+                            Pair(publication, emptyList<ReaderPage>())
+                        } else {
+                            val reader = EpubReader()
+                            val loadedEpub = reader.readEpub(file.inputStream())
+                            val toc = mutableListOf<TocItem>()
+                            val allPages = mutableListOf<ReaderPage>()
+                            val tempHrefToPageMap = mutableMapOf<String, Int>()
+
+                            val tocResourceHrefs = loadedEpub.tableOfContents.tocReferences.map { it.resource.href }
+                            loadedEpub.tableOfContents.tocReferences.forEach { item ->
+                                toc.add(TocItem(item.title, item.resource.href, 0))
+                            }
+
+                            // One "Page" per Spine Item (Chapter)
+                            loadedEpub.spine.spineReferences.forEachIndexed { spineIndex, ref ->
+                                try {
+                                    val href = ref.resource.href
+                                    tempHrefToPageMap[href] = spineIndex
+                                    
+                                    val content = ref.resource.reader.readText()
+                                    val basePath = ref.resource.href.substringBeforeLast("/", "")
+                                    val bodyRegex = Regex("<body[^>]*>(.*?)</body>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                                    val match = bodyRegex.find(content)
+                                    val body = match?.groupValues?.get(1) ?: content
+                                    
+                                    allPages.add(ReaderPage(wrapInTemplate(body, bgHex, textHex), basePath))
+                                } catch (_: Exception) {
+                                    Log.e("BookViewModel", "Error loading chapter $spineIndex")
+                                }
+                            }
+
+                            val finalToc = toc.mapIndexed { index, item ->
+                                val resHref = tocResourceHrefs[index].trimStart('/')
+                                val spineIdx = loadedEpub.spine.spineReferences.indexOfFirst {
+                                    val sHref = it.resource.href.trimStart('/')
+                                    sHref == resHref || sHref == Uri.decode(resHref)
+                                }
+                                item.copy(pageIndex = spineIdx)
+                            }
+
+                            withContext(Dispatchers.Main) {
+                                readerToc = finalToc
+                                hrefToPageMap = tempHrefToPageMap
+                            }
+                            Pair(loadedEpub, allPages)
+                        }
+                    } else if (format == "mobi" || format == "azw3") {
+                        val mobiData = MobiExtractor.extractText(app, file)
+                        val bodyRegex = Regex("<body[^>]*>(.*?)</body>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                        val match = bodyRegex.find(mobiData.text)
+                        val innerBody = match?.groupValues?.get(1) ?: mobiData.text
+                        
+                        val chapters = innerBody.split(Regex("(?i)<h[1-2][^>]*>"))
+                        val generatedPages = mutableListOf<ReaderPage>()
+                        
+                        if (chapters.size > 1) {
+                            chapters.forEachIndexed { index, content ->
+                                if (content.isNotBlank()) {
+                                    val prefix = if (index > 0) "<h2>" else ""
+                                    generatedPages.add(ReaderPage(wrapInTemplate(prefix + content, bgHex, textHex), ""))
+                                }
+                            }
+                        } else {
+                            generatedPages.add(ReaderPage(wrapInTemplate(innerBody, bgHex, textHex), ""))
+                        }
+                        
+                        Pair(mobiData, generatedPages)
+                    } else {
+                        throw Exception("Unsupported format")
+                    }
+                }
+                
+                withContext(Dispatchers.Main) {
+                    val finalPages = result.second
+                    if (format == "epub") {
+                        if (result.first is Publication) {
+                            currentPublication = result.first as Publication
+                            currentEpubBook = null
+                        } else {
+                            currentEpubBook = result.first as? nl.siegmann.epublib.domain.Book
+                            currentPublication = null
+                        }
+                        currentMobiData = null
+                    } else {
+                        currentMobiData = result.first as? MobiData
+                        currentEpubBook = null
+                        readerToc = emptyList()
+                    }
+                    chapterPageCounts = emptyMap() // Reset pagination info
+                    readerPages = finalPages
+                    lastPreparedParams = currentParams
+                }
+            } catch (e: Exception) {
+                if (e !is kotlinx.coroutines.CancellationException) {
+                    readerError = "Failed to load book"
+                }
+            } finally {
+                isReaderLoading = false
+            }
+        }
+    }
+
+    private fun wrapInTemplate(content: String, bgHex: String, textHex: String): String {
+        return """
+            <!DOCTYPE html>
+            <html>
+            <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+            <style>
+                * {
+                    box-sizing: border-box;
+                    -webkit-tap-highlight-color: transparent;
+                }
+                html, body {
+                    margin: 0;
+                    padding: 0;
+                    background-color: $bgHex;
+                    color: $textHex;
+                    width: 100vw;
+                    height: 100vh;
+                    overflow: hidden;
+                    font-family: "Georgia", serif;
+                }
+                body {
+                    font-size: ${readerFontSize}px;
+                    line-height: 1.6;
+                    -webkit-text-size-adjust: none;
+                }
+                #content-container {
+                    height: 100vh;
+                    width: 100vw;
+                    /* Using column-width slightly less than 100vw to ensure single column per view */
+                    column-width: 100vw;
+                    column-gap: 0;
+                    column-fill: auto;
+                    padding: 40px 24px 60px 24px;
+                }
+                /* Desktop/Tablet wide support: two columns per screen */
+                @media (min-width: 1000px) {
+                    #content-container {
+                        column-width: 45vw;
+                        column-gap: 5vw;
+                        padding: 60px 5vw;
+                    }
+                }
+                img, svg {
+                    max-width: 100% !important;
+                    max-height: calc(100vh - 120px) !important;
+                    display: block;
+                    margin: 10px auto;
+                    object-fit: contain;
+                    break-inside: avoid;
+                }
+                p, h1, h2, h3, h4, h5, h6, li, blockquote {
+                    break-inside: avoid-column;
+                    orphans: 2;
+                    widows: 2;
+                }
+                p {
+                    margin: 0 0 1em 0;
+                    text-align: justify;
+                    overflow-wrap: break-word;
+                    word-wrap: break-word;
+                }
+                h1, h2, h3, h4, h5, h6 {
+                    text-align: center;
+                    line-height: 1.3;
+                    margin: 1.2em 0 0.8em 0;
+                    break-after: avoid;
+                }
+                /* Hide scrollbars */
+                ::-webkit-scrollbar {
+                    display: none;
+                }
+            </style>
+            </head>
+            <body>
+                <div id="content-container">
+                    $content
+                </div>
+                <script>
+                    function getPageCount() {
+                        var container = document.getElementById('content-container');
+                        if (!container) return 1;
+                        // Use scrollWidth to determine how many 'pages' (viewports) we have
+                        return Math.max(1, Math.ceil(container.scrollWidth / window.innerWidth));
+                    }
+                    
+                    function scrollToPage(index) {
+                        var x = index * window.innerWidth;
+                        window.scrollTo({
+                            left: x,
+                            top: 0,
+                            behavior: 'instant'
+                        });
+                    }
+
+                    function reportPageCount() {
+                        if (window.Android && window.Android.onPageCountReady) {
+                            window.Android.onPageCountReady(getPageCount());
+                        }
+                    }
+
+                    // Multi-pass reporting to handle late-loading assets
+                    if (document.readyState === 'complete') {
+                        reportPageCount();
+                    }
+                    
+                    window.onload = function() {
+                        reportPageCount();
+                        setTimeout(reportPageCount, 300);
+                        setTimeout(reportPageCount, 1000);
+                        setTimeout(reportPageCount, 3000);
+                    };
+                    
+                    window.addEventListener('resize', reportPageCount);
+                    // Add observer to catch layout shifts after fonts/images load
+                    const resizeObserver = new ResizeObserver(() => reportPageCount());
+                    resizeObserver.observe(document.body);
+                </script>
+            </body>
+            </html>
+        """.trimIndent()
+    }
+
+    fun findPageIndexForHref(href: String): Int {
+        return hrefToPageMap[href] ?: -1
     }
 
     fun downloadAndOpenBook(context: Context, book: Book, onReady: () -> Unit) {
-        if (book.id < 0) { // Local book
+        preparationJob?.cancel()
+        readerPages = emptyList()
+        readerToc = emptyList()
+        currentEpubBook = null
+        currentMobiData = null
+        lastPreparedParams = null
+        currentPageIndex = 0
+        currentBook = null
+        currentBookFile = null
+
+        if (book.id < 0) {
             currentBook = book
             currentBookFile = File(book.downloadUrl)
             onReady()
@@ -335,8 +852,8 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                         withContext(Dispatchers.Main) { onReady() }
                     }
                 }
-            } catch (e: Exception) {
-                errorMessage = app.getString(R.string.download_error, e.localizedMessage)
+            } catch (_: Exception) {
+                errorMessage = app.getString(R.string.download_error)
             } finally {
                 isLoading = false
             }
@@ -370,8 +887,8 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                             val mobiData = MobiExtractor.extractText(context, destFile)
                             series = mobiData.series
                             seriesIndex = mobiData.seriesIndex
-                        } catch (e: Exception) {
-                            android.util.Log.e("BookViewModel", "Error extracting MOBI metadata", e)
+                        } catch (_: Exception) {
+                            Log.e("BookViewModel", "Error extracting MOBI metadata")
                         }
                     }
                     "epub" -> {
@@ -379,8 +896,8 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                             val reader = EpubReader()
                             val epubBook = reader.readEpub(destFile.inputStream())
                             author = epubBook.metadata.authors.firstOrNull()?.let { "${it.firstname} ${it.lastname}".trim() } ?: context.getString(R.string.unknown_author)
-                        } catch (e: Exception) {
-                            android.util.Log.e("BookViewModel", "Error extracting EPUB metadata", e)
+                        } catch (_: Exception) {
+                            Log.e("BookViewModel", "Error extracting EPUB metadata")
                         }
                     }
                     "pdf" -> {
@@ -389,8 +906,8 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                                 val info = pdf.documentInformation
                                 author = info.author ?: context.getString(R.string.unknown_author)
                             }
-                        } catch (e: Exception) {
-                            android.util.Log.e("BookViewModel", "Error extracting PDF metadata", e)
+                        } catch (_: Exception) {
+                            Log.e("BookViewModel", "Error extracting PDF metadata")
                         }
                     }
                 }
@@ -402,8 +919,7 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                     format = extension,
                     filePath = destFile.absolutePath,
                     series = series,
-                    seriesOrder = seriesIndex?.toDouble(),
-                    tags = null // For now, local imports don't have tags unless we parse them
+                    seriesOrder = seriesIndex?.toDouble()
                 )
                 
                 localBookDao.insertBook(entity)
@@ -423,9 +939,9 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                 withContext(Dispatchers.Main) {
                     localBooks = localBooks + newBook
                 }
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 withContext(Dispatchers.Main) {
-                    errorMessage = app.getString(R.string.error_failed_to_import, e.localizedMessage ?: app.getString(R.string.unknown_error))
+                    errorMessage = app.getString(R.string.error_failed_to_import)
                 }
             }
         }
@@ -434,7 +950,6 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteBook(book: Book) {
         viewModelScope.launch(Dispatchers.IO) {
             if (book.id < 0) {
-                // Local book: delete from DB and file
                 localBookDao.deleteBook(LocalBookEntity(
                     id = book.id,
                     title = book.title,
@@ -453,7 +968,6 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                     localBooks = localBooks.filter { it.id != book.id }
                 }
             } else {
-                // Server book: just remove from UI list
                 withContext(Dispatchers.Main) {
                     books = books.filter { it.id != book.id }
                 }
@@ -461,17 +975,12 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun deleteSelectedBooks(selectedIds: Set<Int>) {
-        val toDelete = (books + localBooks).filter { selectedIds.contains(it.id) }
-        toDelete.forEach { deleteBook(it) }
-    }
-
     private fun getFileName(context: Context, uri: Uri): String? {
         var result: String? = null
         if (uri.scheme == "content") {
             context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
                 if (cursor.moveToFirst()) {
-                    val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
                     if (index != -1) result = cursor.getString(index)
                 }
             }
@@ -483,4 +992,6 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
         }
         return result
     }
+
+
 }

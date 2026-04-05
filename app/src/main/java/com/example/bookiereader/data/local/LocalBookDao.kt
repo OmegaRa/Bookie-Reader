@@ -16,4 +16,5 @@ interface LocalBookDao {
 
     @Delete
     suspend fun deleteBook(book: LocalBookEntity)
+
 }

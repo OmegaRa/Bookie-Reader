@@ -16,8 +16,8 @@ android {
         applicationId = "com.example.bookiereader"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -34,6 +34,7 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
+        isCoreLibraryDesugaringEnabled = true
     }
     buildFeatures {
         compose = true
@@ -53,6 +54,8 @@ dependencies {
     implementation(libs.google.material)
     implementation(libs.androidx.core.splashscreen)
     implementation(libs.androidx.compose.material.icons.extended)
+    implementation(libs.androidx.security.crypto)
+    coreLibraryDesugaring(libs.desugarJdkLibs)
 
     // Networking
     implementation(libs.retrofit.core)
@@ -65,6 +68,9 @@ dependencies {
     implementation(libs.epublib.core) {
         exclude(group = "xmlpull", module = "xmlpull")
     }
+    implementation(libs.readium.shared)
+    implementation(libs.readium.streamer)
+    implementation(libs.readium.navigator)
     implementation(libs.pdf.viewer.androidx)
     implementation(libs.pdfbox.android)
 

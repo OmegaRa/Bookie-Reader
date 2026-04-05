@@ -51,10 +51,11 @@
     <string name="import_books_desc">Add EPUB or PDF files from your device</string>
     <string name="about_header">About</string>
     <string name="version_label">Version</string>
-    <string name="version_value">1.0.0 (BETA)</string>
+    <string name="version_value">1.1</string>
     <string name="select_theme_title">Select Theme</string>
     <string name="theme_light">Light</string>
     <string name="theme_dark">Dark</string>
+    <string name="theme_sepia">Sepia</string>
     <string name="theme_system">System</string>
     <string name="session_expired">Session expired or server unreachable.</string>
     <string name="login_failed">Login failed: %1$d</string>
