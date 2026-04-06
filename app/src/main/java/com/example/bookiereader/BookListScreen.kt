@@ -1,5 +1,6 @@
 package com.example.bookiereader
 
+import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -16,6 +17,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Close
@@ -24,7 +26,7 @@ import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.outlined.IosShare
+import androidx.compose.material.icons.filled.Update
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -45,6 +47,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.net.toUri
 import coil.ImageLoader
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -79,9 +82,9 @@ fun BookListScreen(
 
     val onToggleSelection: (Int) -> Unit = { bookId ->
         if (selectedBooks.value.contains(bookId)) {
-            selectedBooks.value = selectedBooks.value - bookId
+            selectedBooks.value -= bookId
         } else {
-            selectedBooks.value = selectedBooks.value + bookId
+            selectedBooks.value += bookId
         }
     }
 
@@ -105,7 +108,7 @@ fun BookListScreen(
                             Icon(
                                 painter = painterResource(id = R.drawable.ic_bookie_logo),
                                 contentDescription = null,
-                                modifier = Modifier.size(32.dp),
+                                modifier = Modifier.size(40.dp),
                                 tint = Color.Unspecified
                             )
                             Spacer(modifier = Modifier.width(12.dp))
@@ -145,10 +148,24 @@ fun BookListScreen(
                             Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.delete_selected), tint = Color.Red)
                         }
                     } else {
+                        if (viewModel.isUpdateAvailable) {
+                            IconButton(onClick = {
+                                viewModel.updateUrl?.let { url ->
+                                    val intent = Intent(Intent.ACTION_VIEW, url.toUri())
+                                    context.startActivity(intent)
+                                }
+                            }) {
+                                Icon(
+                                    Icons.Default.Update,
+                                    contentDescription = "Update Available",
+                                    tint = accentColor
+                                )
+                            }
+                        }
                         IconButton(onClick = { 
                             launcher.launch(arrayOf("application/epub+zip", "application/pdf"))
                         }) {
-                            Icon(Icons.Outlined.IosShare, contentDescription = stringResource(R.string.import_book))
+                            Icon(Icons.Default.Add, contentDescription = stringResource(R.string.import_book))
                         }
                         Box {
                             IconButton(onClick = { showProfileMenu = true }) {
@@ -329,7 +346,7 @@ fun BookListScreen(
                 } else {
                     if (isGridView) {
                         LazyVerticalGrid(
-                            columns = GridCells.Fixed(2),
+                            columns = GridCells.Adaptive(minSize = 160.dp),
                             contentPadding = PaddingValues(12.dp),
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp),

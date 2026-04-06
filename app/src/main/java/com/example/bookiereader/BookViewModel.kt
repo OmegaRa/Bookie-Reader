@@ -19,6 +19,7 @@ import com.example.bookiereader.data.LoginRequest
 import com.example.bookiereader.data.local.AppDatabase
 import com.example.bookiereader.data.local.LocalBookEntity
 import com.example.bookiereader.network.ApiService
+import com.example.bookiereader.network.GithubService
 import com.google.gson.GsonBuilder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -190,6 +191,12 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
     var searchQuery by mutableStateOf("")
     var selectedTag by mutableStateOf<String?>(null)
 
+    // Update state
+    var isUpdateAvailable by mutableStateOf(false)
+        private set
+    var updateUrl by mutableStateOf<String?>(null)
+        private set
+
     val allTags: List<String>
         get() = (books + localBooks).flatMap { it.tags ?: emptyList() }.distinct().sorted()
 
@@ -320,6 +327,7 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         loadLocalBooks()
+        checkForUpdates()
         val savedUrl = getSavedBaseUrl()
         val savedSession = getSavedSessionCookie()
         if (!savedUrl.isNullOrBlank() && !savedSession.isNullOrBlank()) {
@@ -330,6 +338,42 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                 errorMessage = "Failed to reconnect"
             }
         }
+    }
+
+    private fun checkForUpdates() {
+        viewModelScope.launch {
+            try {
+                val retrofit = Retrofit.Builder()
+                    .baseUrl("https://api.github.com/")
+                    .addConverterFactory(GsonConverterFactory.create())
+                    .build()
+                val service = retrofit.create(GithubService::class.java)
+                val latestRelease = service.getLatestRelease()
+                
+                val latestVersion = latestRelease.tag_name.removePrefix("v")
+                
+                if (isNewerVersion(BuildConfig.VERSION_NAME, latestVersion)) {
+                    isUpdateAvailable = true
+                    updateUrl = latestRelease.html_url
+                }
+            } catch (e: Exception) {
+                Log.e("BookViewModel", "Failed to check for updates", e)
+            }
+        }
+    }
+
+    @Suppress("SameParameterValue")
+    private fun isNewerVersion(current: String, latest: String): Boolean {
+        val currentParts = current.split(".").mapNotNull { it.toIntOrNull() }
+        val latestParts = latest.split(".").mapNotNull { it.toIntOrNull() }
+        
+        for (i in 0 until maxOf(currentParts.size, latestParts.size)) {
+            val c = currentParts.getOrElse(i) { 0 }
+            val l = latestParts.getOrElse(i) { 0 }
+            if (l > c) return true
+            if (c > l) return false
+        }
+        return false
     }
 
     private fun loadLocalBooks() {
