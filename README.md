@@ -1,6 +1,9 @@
 # Bookie Reader
 
 Bookie Reader is a modern, lightweight Android ebook reader designed specifically for use with the [Bookie](https://github.com/sweatyeggs69/Bookie) self-hosted ebook manager. It provides a seamless reading experience by connecting directly to your personal library.
+<p align="center">
+<img width="405" height="902" alt="Dark Mode" src="https://github.com/user-attachments/assets/6f58d5ca-aed3-4efb-bb29-6c4f2c198a6d" /> <img width="405" height="902" alt="Light Mode" src="https://github.com/user-attachments/assets/3ce3b9a7-5de9-47b1-b1a5-c0e079b157fc" />
+</p>
 
 ## ✨ Features
 
@@ -41,6 +44,10 @@ Bookie Reader is a modern, lightweight Android ebook reader designed specificall
 - This app is meant to point to the excellent [Bookie](https://github.com/sweatyeggs69/Bookie) self-hosted ebook manager.
 - Special thanks to the **Readium** team for their comprehensive [Kotlin Toolkit](https://github.com/readium/kotlin-toolkit), which powers the pagination and rendering features.
 - Created with assistance from **Gemini in Android Studio**.
+
+[![Get it on Obtainium](https://github.com/user-attachments/assets/713d71c5-3dec-4ec4-a3f2-8d28d025a9c6)](http://apps.obtainium.imranr.dev/redirect.html?r=obtainium://add/https://github.com/OmegaRa/Bookie-Reader/releases)
+[![Get it on GitHub](https://github.com/machiav3lli/oandbackupx/raw/034b226cea5c1b30eb4f6a6f313e4dadcbb0ece4/badge_github.png)](https://github.com/OmegaRa/Bookie-Reader/releases)
+
 
 ---
 *Note: This is an unofficial companion app for the Bookie project.*
