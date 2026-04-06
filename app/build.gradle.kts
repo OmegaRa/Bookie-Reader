@@ -1,23 +1,20 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
-    id("com.google.devtools.ksp")
+    alias(libs.plugins.ksp)
 }
 
 android {
     namespace = "com.example.bookiereader"
-    compileSdk {
-        version = release(36) {
-            minorApiLevel = 1
-        }
-    }
+    compileSdk = 36
+    compileSdkExtension = 19
 
     defaultConfig {
         applicationId = "com.example.bookiereader"
         minSdk = 24
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 3
+        versionName = "1.1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -31,18 +28,26 @@ android {
             )
         }
     }
+    // Built-in Kotlin in AGP 9.0+ handles jvmTarget via compileOptions
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
         isCoreLibraryDesugaringEnabled = true
     }
     buildFeatures {
         compose = true
         buildConfig = true
     }
+
+    packaging {
+        resources {
+            excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
+        }
+    }
 }
 
 dependencies {
+    implementation(kotlin("stdlib"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
@@ -70,7 +75,11 @@ dependencies {
     }
     implementation(libs.readium.shared)
     implementation(libs.readium.streamer)
-    implementation(libs.readium.navigator)
+    implementation(libs.readium.nav)
+    implementation(libs.readium.adapter.pdfium)
+    implementation(libs.readium.adapter.pdfium.document)
+    implementation(libs.readium.adapter.pdfium.navigator)
+    implementation(libs.barteksc.pdf.viewer)
     implementation(libs.pdf.viewer.androidx)
     implementation(libs.pdfbox.android)
 

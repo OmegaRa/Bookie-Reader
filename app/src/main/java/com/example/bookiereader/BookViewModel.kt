@@ -2,7 +2,9 @@ package com.example.bookiereader
 
 import android.app.Application
 import android.content.Context
+import android.graphics.pdf.PdfRenderer
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
 import android.util.Base64
 import android.util.Log
@@ -29,10 +31,17 @@ import org.readium.r2.shared.publication.Locator
 import org.readium.r2.shared.publication.Publication
 import org.readium.r2.streamer.PublicationOpener
 import org.readium.r2.streamer.parser.epub.EpubParser
+import org.readium.r2.streamer.parser.pdf.PdfParser
 import org.readium.r2.shared.util.asset.Asset
 import org.readium.r2.shared.util.asset.AssetRetriever
 import org.readium.r2.shared.util.http.DefaultHttpClient
 import org.readium.r2.navigator.epub.EpubNavigatorFactory
+import org.readium.r2.navigator.VisualNavigator
+import org.readium.r2.navigator.pdf.PdfNavigatorFactory
+import org.readium.adapter.pdfium.navigator.PdfiumEngineProvider
+import org.readium.adapter.pdfium.document.PdfiumDocumentFactory
+import com.github.barteksc.pdfviewer.PDFView
+import org.readium.r2.shared.ExperimentalReadiumApi
 import com.google.gson.reflect.TypeToken
 import org.json.JSONObject
 import okhttp3.Cookie
@@ -56,6 +65,7 @@ data class TocItem(
     val pageIndex: Int = -1
 )
 
+@OptIn(ExperimentalReadiumApi::class)
 class BookViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application
     private val prefs = application.getSharedPreferences("bookie_prefs", Context.MODE_PRIVATE)
@@ -174,7 +184,8 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
     // Settings state
     var readerFontSize by mutableStateOf(prefs.getFloat("reader_font_size", 18f))
     var themeMode by mutableStateOf(prefs.getString("theme_mode", "System") ?: "System")
-    var readerTheme by mutableStateOf(prefs.getString("theme_mode", "System") ?: "System")
+    var readerTheme by mutableStateOf(prefs.getString("reader_theme", "System") ?: "System")
+    var readerScrollMode by mutableStateOf(prefs.getString("reader_scroll_mode", "Horizontal") ?: "Horizontal")
     var sortBy by mutableStateOf(prefs.getString("sort_by", "Author") ?: "Author")
     var searchQuery by mutableStateOf("")
     var selectedTag by mutableStateOf<String?>(null)
@@ -194,8 +205,8 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateThemeMode(mode: String) {
+        if (mode.isBlank()) return
         themeMode = mode
-        readerTheme = mode
         prefs.edit { putString("theme_mode", mode) }
     }
 
@@ -204,6 +215,10 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
     var currentPublication: Publication? by mutableStateOf(null)
         private set
     var epubNavigatorFactory: EpubNavigatorFactory? by mutableStateOf(null)
+        private set
+    var pdfNavigatorFactory: Any? by mutableStateOf(null)
+        private set
+    var pdfNavigator: VisualNavigator? by mutableStateOf(null)
         private set
 
     private fun flattenToc(links: List<Link>, level: Int = 0): List<TocItem> {
@@ -510,11 +525,26 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun logout(onLoggedOut: () -> Unit) {
-        prefs.edit { clear() }
+        val serverUrl = getSavedBaseUrl() ?: ""
+        val session = getSavedSessionCookie() ?: ""
+        
+        prefs.edit { 
+            clear()
+            // Restore only the essential connection info
+            if (serverUrl.isNotEmpty()) putString("base_url", encrypt(serverUrl))
+            if (session.isNotEmpty()) putString("session_cookie", encrypt(session))
+        }
+        
+        // Reset in-memory state
+        themeMode = "System"
+        readerTheme = "System"
+        readerFontSize = 18f
+        readerScrollMode = "Horizontal"
+        sortBy = "Author"
+        
         books = emptyList()
         okHttpClient = null
         baseUrl = ""
-        sortBy = "Author"
         onLoggedOut()
     }
 
@@ -532,9 +562,9 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateReaderTheme(theme: String) {
+        if (theme.isBlank()) return
         readerTheme = theme
-        themeMode = theme
-        prefs.edit { putString("theme_mode", theme) }
+        prefs.edit { putString("reader_theme", theme) }
     }
 
     fun updateReaderFontSize(delta: Int) {
@@ -542,22 +572,59 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
         prefs.edit { putFloat("reader_font_size", readerFontSize) }
     }
 
+    fun updateReaderScrollMode(mode: String) {
+        readerScrollMode = mode
+        prefs.edit { putString("reader_scroll_mode", mode) }
+    }
+
     private fun colorToHex(color: Int): String {
         return String.format("#%06X", 0xFFFFFF and color)
     }
 
     fun prepareReader(file: File, bgColor: Int? = null, textColor: Int? = null) {
-        val currentParams = listOf(file.absolutePath, readerFontSize, readerTheme, bgColor, textColor)
-        if (lastPreparedParams == currentParams && readerPages.isNotEmpty()) return
+        val currentParams = listOf(file.absolutePath, readerFontSize, readerTheme, readerScrollMode, bgColor, textColor)
         
+        val oldParams = lastPreparedParams as? List<*>
+        val fileChanged = oldParams == null || oldParams[0] != file.absolutePath
+        
+        // If nothing changed, return
+        if (!fileChanged && lastPreparedParams == currentParams && (readerPages.isNotEmpty() || currentPublication != null)) return
+        
+        val isReadiumFormat = file.extension.lowercase() in listOf("epub", "pdf")
+        
+        // If it's Readium and only preferences/colors changed, we don't need to reload the publication
+        if (!fileChanged && isReadiumFormat && currentPublication != null) {
+            lastPreparedParams = currentParams
+            return
+        }
+
         preparationJob?.cancel()
-        preparationJob = viewModelScope.launch(Dispatchers.IO) {
+        
+        // Only reset publication-related state if file changed
+        if (fileChanged) {
             isReaderLoading = true
             readerError = null
+            currentPublication = null
+            epubNavigatorFactory = null
+            pdfNavigatorFactory = null
+            pdfNavigator = null
+            currentEpubBook = null
+            currentMobiData = null
+            readerPages = emptyList()
+            readerToc = emptyList()
+        }
+
+        preparationJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 val format = file.extension.lowercase()
-                val bgHex = if (bgColor != null) colorToHex(bgColor) else if (readerTheme == "Dark") "#121212" else "#FFFFFF"
-                val textHex = if (textColor != null) colorToHex(textColor) else if (readerTheme == "Dark") "#E0E0E0" else "#1A1A1A"
+                val isDark = when (readerTheme) {
+                    "Dark" -> true
+                    "Light" -> false
+                    "System" -> (app.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
+                    else -> false
+                }
+                val bgHex = if (bgColor != null) colorToHex(bgColor) else if (isDark) "#121212" else "#FFFFFF"
+                val textHex = if (textColor != null) colorToHex(textColor) else if (isDark) "#E0E0E0" else "#1A1A1A"
                 
                 val result: Pair<Any, List<ReaderPage>> = withContext(Dispatchers.IO) {
                     if (format == "epub") {
@@ -651,6 +718,52 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                         }
                         
                         Pair(mobiData, generatedPages)
+                    } else if (format == "pdf") {
+                        val assetRetriever = AssetRetriever(app.contentResolver, DefaultHttpClient())
+                        val publicationOpener = PublicationOpener(
+                            publicationParser = PdfParser(app, pdfFactory = PdfiumDocumentFactory(app)),
+                        )
+                        val publication = try {
+                            val asset: Asset? = assetRetriever.retrieve(file).getOrNull()
+                            if (asset != null) {
+                                publicationOpener.open(asset, allowUserInteraction = false).getOrNull()
+                            } else {
+                                null
+                            }
+                        } catch (e: Exception) {
+                            Log.e("BookViewModel", "Error opening PDF with Readium", e)
+                            null
+                        }
+
+                        if (publication != null) {
+                            withContext(Dispatchers.Main) {
+                                currentPublication = publication
+                                val engineProvider = PdfiumEngineProvider(
+                                    listener = object : PdfiumEngineProvider.Listener {
+                                        override fun onConfigurePdfView(configurator: PDFView.Configurator) {
+                                            configurator
+                                                .pageSnap(true)
+                                                .pageFling(true)
+                                                .autoSpacing(true)
+                                        }
+                                    }
+                                )
+                                pdfNavigatorFactory = PdfNavigatorFactory(publication, engineProvider)
+                                readerToc = flattenToc(publication.tableOfContents)
+                                loadBookmarks(currentBook?.id ?: -1)
+                            }
+                            Pair(publication, emptyList<ReaderPage>())
+                        } else {
+                            // Fallback to legacy PDF handling if Readium fails
+                            val pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+                            val renderer = PdfRenderer(pfd)
+                            val pageCount = renderer.pageCount
+                            renderer.close()
+                            pfd.close()
+
+                            val dummyPages = List(pageCount) { ReaderPage("", null) }
+                            Pair(pageCount, dummyPages)
+                        }
                     } else {
                         throw Exception("Unsupported format")
                     }
@@ -658,7 +771,7 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                 
                 withContext(Dispatchers.Main) {
                     val finalPages = result.second
-                    if (format == "epub") {
+                    if (format == "epub" || format == "pdf") {
                         if (result.first is Publication) {
                             currentPublication = result.first as Publication
                             currentEpubBook = null
@@ -687,6 +800,7 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun wrapInTemplate(content: String, bgHex: String, textHex: String): String {
+        val isVertical = readerScrollMode == "Vertical"
         return """
             <!DOCTYPE html>
             <html>
@@ -703,8 +817,7 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                     background-color: $bgHex;
                     color: $textHex;
                     width: 100vw;
-                    height: 100vh;
-                    overflow: hidden;
+                    ${if (isVertical) "" else "height: 100vh; overflow: hidden;"}
                     font-family: "Georgia", serif;
                 }
                 body {
@@ -713,32 +826,33 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                     -webkit-text-size-adjust: none;
                 }
                 #content-container {
-                    height: 100vh;
+                    ${if (isVertical) "" else "height: 100vh;"}
                     width: 100vw;
+                    ${if (isVertical) "" else """
                     /* Using column-width slightly less than 100vw to ensure single column per view */
                     column-width: 100vw;
                     column-gap: 0;
                     column-fill: auto;
+                    """}
                     padding: 40px 24px 60px 24px;
                 }
                 /* Desktop/Tablet wide support: two columns per screen */
                 @media (min-width: 1000px) {
                     #content-container {
-                        column-width: 45vw;
-                        column-gap: 5vw;
+                        ${if (isVertical) "" else "column-width: 45vw; column-gap: 5vw;"}
                         padding: 60px 5vw;
                     }
                 }
                 img, svg {
                     max-width: 100% !important;
-                    max-height: calc(100vh - 120px) !important;
+                    ${if (isVertical) "" else "max-height: calc(100vh - 120px) !important;"}
                     display: block;
                     margin: 10px auto;
                     object-fit: contain;
-                    break-inside: avoid;
+                    ${if (isVertical) "" else "break-inside: avoid;"}
                 }
                 p, h1, h2, h3, h4, h5, h6, li, blockquote {
-                    break-inside: avoid-column;
+                    ${if (isVertical) "" else "break-inside: avoid-column;"}
                     orphans: 2;
                     widows: 2;
                 }
@@ -768,11 +882,22 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                     function getPageCount() {
                         var container = document.getElementById('content-container');
                         if (!container) return 1;
+                        if ($isVertical) {
+                            return Math.max(1, Math.ceil(container.scrollHeight / window.innerHeight));
+                        }
                         // Use scrollWidth to determine how many 'pages' (viewports) we have
                         return Math.max(1, Math.ceil(container.scrollWidth / window.innerWidth));
                     }
                     
                     function scrollToPage(index) {
+                        if ($isVertical) {
+                            window.scrollTo({
+                                left: 0,
+                                top: index * window.innerHeight,
+                                behavior: 'instant'
+                            });
+                            return;
+                        }
                         var x = index * window.innerWidth;
                         window.scrollTo({
                             left: x,

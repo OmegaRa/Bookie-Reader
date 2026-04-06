@@ -5,8 +5,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -19,7 +17,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -36,8 +33,6 @@ fun SettingsScreen(viewModel: BookViewModel, onBack: () -> Unit) {
             uri?.let { viewModel.importLocalBook(context, it) }
         }
     )
-
-    val showThemeDialog = remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -66,12 +61,61 @@ fun SettingsScreen(viewModel: BookViewModel, onBack: () -> Unit) {
             // Appearance Section
             SettingsHeader(stringResource(R.string.appearance_header))
             
-            SettingsItem(
-                title = stringResource(R.string.theme_label),
-                subtitle = viewModel.themeMode,
-                icon = Icons.Default.Palette,
-                onClick = { showThemeDialog.value = true }
-            )
+            Surface(
+                color = colorScheme.surface,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Palette,
+                            contentDescription = null,
+                            tint = colorScheme.onSurface.copy(alpha = 0.6f),
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Text(
+                            stringResource(R.string.theme_label),
+                            modifier = Modifier.padding(start = 16.dp),
+                            color = colorScheme.onSurface,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                    
+                    Spacer(modifier = Modifier.height(12.dp))
+                    
+                    val themeOptions = listOf(
+                        "System" to stringResource(R.string.theme_system),
+                        "Light" to stringResource(R.string.theme_light),
+                        "Dark" to stringResource(R.string.theme_dark)
+                    )
+                    
+                    themeOptions.chunked(3).forEachIndexed { index, rowOptions ->
+                        if (index > 0) Spacer(Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            rowOptions.forEach { (value, label) ->
+                                FilterChip(
+                                    modifier = Modifier.weight(1f),
+                                    selected = viewModel.themeMode == value,
+                                    onClick = { viewModel.updateThemeMode(value) },
+                                    label = { 
+                                        Text(
+                                            label, 
+                                            modifier = Modifier.fillMaxWidth(), 
+                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                            fontSize = 13.sp
+                                        ) 
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
 
@@ -143,17 +187,6 @@ fun SettingsScreen(viewModel: BookViewModel, onBack: () -> Unit) {
             )
         }
     }
-
-    if (showThemeDialog.value) {
-        ThemeSelectionDialog(
-            currentMode = viewModel.themeMode,
-            onDismiss = { showThemeDialog.value = false },
-            onSelect = { mode ->
-                viewModel.updateThemeMode(mode)
-                showThemeDialog.value = false
-            }
-        )
-    }
 }
 
 @Composable
@@ -207,56 +240,4 @@ fun SettingsItem(
             }
         }
     }
-}
-
-@Composable
-fun ThemeSelectionDialog(
-    currentMode: String,
-    onDismiss: () -> Unit,
-    onSelect: (String) -> Unit
-) {
-    val options = listOf(
-        stringResource(R.string.theme_light) to "Light",
-        stringResource(R.string.theme_sepia) to "Sepia",
-        stringResource(R.string.theme_dark) to "Dark",
-        stringResource(R.string.theme_system) to "System"
-    )
-    
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.select_theme_title)) },
-        text = {
-            Column(Modifier.selectableGroup()) {
-                options.forEach { (label, mode) ->
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .height(56.dp)
-                            .selectable(
-                                selected = (mode == currentMode),
-                                onClick = { onSelect(mode) },
-                                role = Role.RadioButton
-                            )
-                            .padding(horizontal = 16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        RadioButton(
-                            selected = (mode == currentMode),
-                            onClick = null
-                        )
-                        Text(
-                            text = label,
-                            style = MaterialTheme.typography.bodyLarge,
-                            modifier = Modifier.padding(start = 16.dp)
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.cancel))
-            }
-        }
-    )
 }

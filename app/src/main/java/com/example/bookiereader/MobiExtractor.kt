@@ -13,8 +13,8 @@ object MobiExtractor {
             val numRecords = raf.readUnsignedShort()
             
             val recordOffsets = LongArray(numRecords)
-            for (_i in 0 until numRecords) {
-                recordOffsets[_i] = raf.readInt().toLong() and 0xFFFFFFFFL
+            repeat(numRecords) { i ->
+                recordOffsets[i] = raf.readInt().toLong() and 0xFFFFFFFFL
                 raf.skipBytes(4) // Skip attributes and unique ID
             }
             
@@ -35,7 +35,7 @@ object MobiExtractor {
             raf.seek(mobiHeaderOffset)
             val mobiId = ByteArray(4)
             raf.read(mobiId)
-            if (String(mobiId) != "MOBI") return MobiData(context.getString(R.string.error_invalid_mobi), null, null)
+            if (String(mobiId, Charsets.US_ASCII) != "MOBI") return MobiData(context.getString(R.string.error_invalid_mobi), null, null)
 
             val mobiHeaderLength = raf.readInt()
             
@@ -126,11 +126,12 @@ object MobiExtractor {
                 raf.seek(exthOffset)
                 val exthId = ByteArray(4)
                 raf.read(exthId)
-                if (String(exthId) == "EXTH") {
+                if (String(exthId, Charsets.US_ASCII) == "EXTH") {
                     val exthLength = raf.readInt()
                     val recordCount = raf.readInt()
-                    for (_i in 0 until recordCount) {
-                        if (raf.filePointer >= exthOffset + exthLength) break
+                    var recordsProcessed = 0
+                    while (recordsProcessed < recordCount && raf.filePointer < exthOffset + exthLength) {
+                        recordsProcessed++
                         val recordType = raf.readInt()
                         val recordLen = raf.readInt()
                         val dataLen = recordLen - 8
@@ -213,7 +214,7 @@ object PalmDocDecompressor {
                     output.add(0)
                 }
                 c in 1..8 -> { // Literal copy
-                    for (_j in 0 until c) {
+                    repeat(c) {
                         if (i < input.size) {
                             output.add(input[i])
                             i++
@@ -238,8 +239,8 @@ object PalmDocDecompressor {
                         
                         val start = output.size - distance
                         if (distance > 0) {
-                            for (_j in 0 until length) {
-                                val pos = start + _j
+                            repeat(length) { j ->
+                                val pos = start + j
                                 if (pos >= 0 && pos < output.size) {
                                     output.add(output[pos])
                                 }

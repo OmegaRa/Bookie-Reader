@@ -171,7 +171,7 @@ fun CustomSplashScreen() {
         }
         
         Text(
-            text = "v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+            text = "v${BuildConfig.VERSION_NAME}",
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 48.dp),
