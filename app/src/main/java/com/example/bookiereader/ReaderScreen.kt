@@ -245,7 +245,7 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                 HorizontalDivider()
                 if (bookmarks.isNotEmpty()) {
                     Text(
-                        "Bookmarks",
+                        stringResource(R.string.bookmarks_header),
                         modifier = Modifier.padding(16.dp),
                         style = MaterialTheme.typography.titleMedium
                     )
@@ -278,7 +278,7 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                 }
 
                 Text(
-                    "Table of Contents",
+                    stringResource(R.string.toc_header),
                     modifier = Modifier.padding(16.dp),
                     style = MaterialTheme.typography.titleMedium
                 )
@@ -1036,7 +1036,7 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                         },
                         actions = {
                             IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                                Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Table of Contents")
+                                Icon(Icons.AutoMirrored.Filled.List, contentDescription = stringResource(R.string.toc_header))
                             }
                             if (format == "epub" || format == "pdf") {
                                 IconButton(onClick = {
@@ -1055,12 +1055,12 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                                     } ?: false
                                     Icon(
                                         if (isBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
-                                        contentDescription = "Bookmark"
+                                        contentDescription = stringResource(R.string.bookmark_label)
                                     )
                                 }
                             }
                             IconButton(onClick = { showSettings = true }) {
-                                Icon(Icons.Default.Settings, contentDescription = "Settings")
+                                Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.settings_title))
                             }
                         }
                     )
@@ -1089,8 +1089,8 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
 
                         Text(
                             text = if (currentBookFormat == "epub" || currentBookFormat == "pdf") 
-                                "Progress: ${(displayProgress * 100).toInt().coerceIn(0, 100)}%" 
-                                else "Page ${pagerState.currentPage + 1} of ${viewModel.totalPagesCount}",
+                                stringResource(R.string.reader_progress_percent, (displayProgress * 100).toInt().coerceIn(0, 100))
+                                else stringResource(R.string.reader_page_number, pagerState.currentPage + 1, viewModel.totalPagesCount),
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                             style = MaterialTheme.typography.labelLarge,
                             color = Color(uiText)
@@ -1103,10 +1103,10 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
         if (showSettings) {
             AlertDialog(
                 onDismissRequest = { showSettings = false },
-                title = { Text("Reader Settings") },
+                title = { Text(stringResource(R.string.reader_settings_title)) },
                 text = {
                     Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                        Text("Font Size: ${viewModel.readerFontSize}", style = MaterialTheme.typography.bodyMedium)
+                        Text(stringResource(R.string.font_size_label, viewModel.readerFontSize), style = MaterialTheme.typography.bodyMedium)
                         Row(
                             modifier = Modifier.padding(top = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
@@ -1125,7 +1125,7 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                         val fmt = book?.format?.lowercase() ?: ""
                         if (fmt == "pdf") {
                             Spacer(Modifier.height(16.dp))
-                            Text("Scroll Mode", style = MaterialTheme.typography.bodyMedium)
+                            Text(stringResource(R.string.scroll_mode_label), style = MaterialTheme.typography.bodyMedium)
                             Row(
                                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1134,20 +1134,20 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                                     modifier = Modifier.weight(1f),
                                     selected = viewModel.readerScrollMode == "Horizontal",
                                     onClick = { viewModel.updateReaderScrollMode("Horizontal") },
-                                    label = { Text("Horizontal", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center) }
+                                    label = { Text(stringResource(R.string.horizontal_label), modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center) }
                                 )
                                 FilterChip(
                                     modifier = Modifier.weight(1f),
                                     selected = viewModel.readerScrollMode == "Vertical",
                                     onClick = { viewModel.updateReaderScrollMode("Vertical") },
-                                    label = { Text("Vertical", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center) }
+                                    label = { Text(stringResource(R.string.vertical_label), modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center) }
                                 )
                             }
                         }
 
                         if (fmt != "pdf") {
                             Spacer(Modifier.height(16.dp))
-                            Text("Theme", style = MaterialTheme.typography.bodyMedium)
+                            Text(stringResource(R.string.theme_label), style = MaterialTheme.typography.bodyMedium)
                             Column(modifier = Modifier.padding(top = 8.dp)) {
                                 val themeOptions = listOf(
                                     "System" to stringResource(R.string.theme_system),
@@ -1175,7 +1175,7 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                     }
                 },
                 confirmButton = {
-                    TextButton(onClick = { showSettings = false }) { Text("Close") }
+                    TextButton(onClick = { showSettings = false }) { Text(stringResource(R.string.close)) }
                 }
             )
         }
@@ -1183,8 +1183,8 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
         if (bookmarkToDelete != null) {
             AlertDialog(
                 onDismissRequest = { bookmarkToDeleteState.value = null },
-                title = { Text("Delete Bookmark") },
-                text = { Text("Are you sure you want to delete this bookmark?") },
+                title = { Text(stringResource(R.string.delete_bookmark_title)) },
+                text = { Text(stringResource(R.string.delete_bookmark_confirm)) },
                 confirmButton = {
                     TextButton(
                         onClick = {
@@ -1192,10 +1192,10 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                             bookmarkToDeleteState.value = null
                         },
                         colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                    ) { Text("Delete") }
+                    ) { Text(stringResource(R.string.delete)) }
                 },
                 dismissButton = {
-                    TextButton(onClick = { bookmarkToDeleteState.value = null }) { Text("Cancel") }
+                    TextButton(onClick = { bookmarkToDeleteState.value = null }) { Text(stringResource(R.string.cancel)) }
                 }
             )
         }

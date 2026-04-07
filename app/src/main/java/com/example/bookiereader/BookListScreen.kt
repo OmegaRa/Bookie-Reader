@@ -136,14 +136,14 @@ fun BookListScreen(
                         }) {
                             Icon(
                                 if (allSelected) Icons.Default.RadioButtonUnchecked else Icons.Default.CheckCircle,
-                                contentDescription = if (allSelected) "Deselect All" else "Select All"
+                                contentDescription = if (allSelected) stringResource(R.string.deselect_all) else stringResource(R.string.select_all)
                             )
                         }
                         IconButton(onClick = {
                             viewModel.deleteSelectedBooks(selectedBooks.value)
                             selectedBooks.value = emptySet()
                         }) {
-                            Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.delete_selected), tint = Color.Red)
+                            Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.delete_selected), tint = colorScheme.error)
                         }
                     } else {
                         if (viewModel.isUpdateAvailable) {
@@ -155,7 +155,7 @@ fun BookListScreen(
                             }) {
                                 Icon(
                                     Icons.Default.Update,
-                                    contentDescription = "Update Available",
+                                    contentDescription = stringResource(R.string.update_available),
                                     tint = accentColor
                                 )
                             }

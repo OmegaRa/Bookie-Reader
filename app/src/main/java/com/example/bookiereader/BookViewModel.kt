@@ -10,6 +10,8 @@ import android.util.Base64
 import android.util.Log
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -140,7 +142,7 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
     var readerToc by mutableStateOf<List<TocItem>>(emptyList())
     var isReaderLoading by mutableStateOf(false)
     var readerError by mutableStateOf<String?>(null)
-    var currentPageIndex by mutableStateOf(0)
+    var currentPageIndex by mutableIntStateOf(0)
     var currentProgression by mutableStateOf<Double?>(null)
 
     // New state for dynamic pagination - Use SnapshotStateMap for more granular updates
@@ -196,7 +198,7 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
     }
     
     // Settings state
-    var readerFontSize by mutableStateOf(prefs.getFloat("reader_font_size", 18f))
+    var readerFontSize by mutableFloatStateOf(prefs.getFloat("reader_font_size", 18f))
     var themeMode by mutableStateOf(prefs.getString("theme_mode", "System") ?: "System")
     var readerTheme by mutableStateOf(prefs.getString("reader_theme", "System") ?: "System")
     var readerScrollMode by mutableStateOf(prefs.getString("reader_scroll_mode", "Horizontal") ?: "Horizontal")
@@ -417,7 +419,9 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                 val service = retrofit.create(GithubService::class.java)
                 val latestRelease = service.getLatestRelease()
                 
-                val latestVersion = latestRelease.tag_name.removePrefix("v")
+                // GitHub "latest" releases can use tag_name or name for the version string
+                // Depending on how the release was created. Some use "latest" as tag and "v1.1.4" as name.
+                val latestVersion = (latestRelease.name ?: latestRelease.tag_name).removePrefix("v")
                 
                 if (isNewerVersion(BuildConfig.VERSION_NAME, latestVersion)) {
                     isUpdateAvailable = true
@@ -768,161 +772,173 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                 val textHex = if (textColor != null) colorToHex(textColor) else if (isDark) "#E0E0E0" else "#1A1A1A"
                 
                 val result: Pair<Any, List<ReaderPage>> = withContext(Dispatchers.IO) {
-                    if (format == "epub") {
-                        val assetRetriever = AssetRetriever(app.contentResolver, DefaultHttpClient())
-                        val publicationOpener = PublicationOpener(
-                            publicationParser = EpubParser(),
-                        )
-                        val publicationResult = withContext(Dispatchers.IO) {
-                            currentPublication?.close()
-                            val asset: Asset? = assetRetriever.retrieve(file).getOrNull()
-                            if (asset != null) {
-                                publicationOpener.open(asset, allowUserInteraction = false)
-                            } else {
-                                Try.failure(Exception("Asset could not be retrieved."))
-                            }
-                        }
-
-                        if (publicationResult is Success) {
-                            val publication = publicationResult.value
-                            withContext(Dispatchers.Main) {
-                                currentPublication = publication
-                                epubNavigatorFactory = EpubNavigatorFactory(publication)
-                                readerToc = flattenToc(publication, publication.tableOfContents)
-                                loadBookmarks(currentBook?.id ?: -1)
-                            }
-                            Pair(publication as Any, emptyList<ReaderPage>())
-                        } else {
-                            val error = (publicationResult as Failure).value
-                            Log.e("BookViewModel", "Readium EPUB opening failed: $error")
-                            withContext(Dispatchers.Main) {
-                                readerError = error.toString()
-                                currentPublication = null
-                                epubNavigatorFactory = null
-                                pdfNavigatorFactory = null
-                            }
-                            val reader = EpubReader()
-                            val loadedEpub = reader.readEpub(file.inputStream())
-                            val toc = mutableListOf<TocItem>()
-                            val allPages = mutableListOf<ReaderPage>()
-                            val tempHrefToPageMap = mutableMapOf<String, Int>()
-
-                            val tocResourceHrefs = loadedEpub.tableOfContents.tocReferences.map { it.resource.href }
-                            loadedEpub.tableOfContents.tocReferences.forEach { item ->
-                                toc.add(TocItem(item.title, item.resource.href, 0))
-                            }
-
-                            // One "Page" per Spine Item (Chapter)
-                            loadedEpub.spine.spineReferences.forEachIndexed { spineIndex, ref ->
-                                try {
-                                    val href = ref.resource.href
-                                    tempHrefToPageMap[href] = spineIndex
-                                    
-                                    val content = ref.resource.reader.readText()
-                                    val basePath = ref.resource.href.substringBeforeLast("/", "")
-                                    val bodyRegex = Regex("<body[^>]*>(.*?)</body>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-                                    val match = bodyRegex.find(content)
-                                    val body = match?.groupValues?.get(1) ?: content
-                                    
-                                    allPages.add(ReaderPage(wrapInTemplate(body, bgHex, textHex), basePath))
-                                } catch (_: Exception) {
-                                    Log.e("BookViewModel", "Error loading chapter $spineIndex")
+                    when (format) {
+                        "epub" -> {
+                            val assetRetriever = AssetRetriever(app.contentResolver, DefaultHttpClient())
+                            val publicationOpener = PublicationOpener(
+                                publicationParser = EpubParser(),
+                            )
+                            val publicationResult = withContext(Dispatchers.IO) {
+                                currentPublication?.close()
+                                val asset: Asset? = assetRetriever.retrieve(file).getOrNull()
+                                if (asset != null) {
+                                    publicationOpener.open(asset, allowUserInteraction = false)
+                                } else {
+                                    Try.failure(Exception("Asset could not be retrieved."))
                                 }
                             }
 
-                            val finalToc = toc.mapIndexed { index, item ->
-                                val resHref = tocResourceHrefs[index].trimStart('/')
-                                val spineIdx = loadedEpub.spine.spineReferences.indexOfFirst {
-                                    val sHref = it.resource.href.trimStart('/')
-                                    sHref == resHref || sHref == Uri.decode(resHref)
+                            when (publicationResult) {
+                                is Success -> {
+                                    val publication = publicationResult.value
+                                    withContext(Dispatchers.Main) {
+                                        currentPublication = publication
+                                        epubNavigatorFactory = EpubNavigatorFactory(publication)
+                                        readerToc = flattenToc(publication, publication.tableOfContents)
+                                        loadBookmarks(currentBook?.id ?: -1)
+                                    }
+                                    Pair(publication as Any, emptyList())
                                 }
-                                item.copy(pageIndex = spineIdx)
-                            }
 
-                            withContext(Dispatchers.Main) {
-                                readerToc = finalToc
-                                hrefToPageMap = tempHrefToPageMap
-                            }
-                            Pair(loadedEpub as Any, allPages)
-                        }
-                    } else if (format == "mobi" || format == "azw3") {
-                        val mobiData = MobiExtractor.extractText(app, file)
-                        val bodyRegex = Regex("<body[^>]*>(.*?)</body>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-                        val match = bodyRegex.find(mobiData.text)
-                        val innerBody = match?.groupValues?.get(1) ?: mobiData.text
-                        
-                        val chapters = innerBody.split(Regex("(?i)<h[1-2][^>]*>"))
-                        val generatedPages = mutableListOf<ReaderPage>()
-                        
-                        if (chapters.size > 1) {
-                            chapters.forEachIndexed { index, content ->
-                                if (content.isNotBlank()) {
-                                    val prefix = if (index > 0) "<h2>" else ""
-                                    generatedPages.add(ReaderPage(wrapInTemplate(prefix + content, bgHex, textHex), ""))
-                                }
-                            }
-                        } else {
-                            generatedPages.add(ReaderPage(wrapInTemplate(innerBody, bgHex, textHex), ""))
-                        }
-                        
-                        Pair(mobiData, generatedPages)
-                    } else if (format == "pdf") {
-                        currentPublication?.close()
-                        val assetRetriever = AssetRetriever(app.contentResolver, DefaultHttpClient())
-                        val publicationOpener = PublicationOpener(
-                            publicationParser = PdfParser(app, pdfFactory = PdfiumDocumentFactory(app)),
-                        )
-                        val publicationResult = withContext(Dispatchers.IO) {
-                            val asset: Asset? = assetRetriever.retrieve(file).getOrNull()
-                            if (asset != null) {
-                                publicationOpener.open(asset, allowUserInteraction = false)
-                            } else {
-                                Try.failure(Exception("Asset could not be retrieved."))
-                            }
-                        }
+                                is Failure -> {
+                                    val error = publicationResult.value
+                                    Log.e("BookViewModel", "Readium EPUB opening failed: $error")
+                                    withContext(Dispatchers.Main) {
+                                        readerError = error.toString()
+                                        currentPublication = null
+                                        epubNavigatorFactory = null
+                                        pdfNavigatorFactory = null
+                                    }
+                                    val reader = EpubReader()
+                                    val loadedEpub = reader.readEpub(file.inputStream())
+                                    val toc = mutableListOf<TocItem>()
+                                    val allPages = mutableListOf<ReaderPage>()
+                                    val tempHrefToPageMap = mutableMapOf<String, Int>()
 
-                        if (publicationResult is Success) {
-                            val publication = publicationResult.value
-                            withContext(Dispatchers.Main) {
-                                currentPublication = publication
-                                val engineProvider = PdfiumEngineProvider(
-                                    listener = object : PdfiumEngineProvider.Listener {
-                                        override fun onConfigurePdfView(configurator: PDFView.Configurator) {
-                                            configurator
-                                                .pageSnap(true)
-                                                .pageFling(true)
-                                                .autoSpacing(true)
+                                    val tocResourceHrefs = loadedEpub.tableOfContents.tocReferences.map { it.resource.href }
+                                    loadedEpub.tableOfContents.tocReferences.forEach { item ->
+                                        toc.add(TocItem(item.title, item.resource.href, 0))
+                                    }
+
+                                    // One "Page" per Spine Item (Chapter)
+                                    loadedEpub.spine.spineReferences.forEachIndexed { spineIndex, ref ->
+                                        try {
+                                            val href = ref.resource.href
+                                            tempHrefToPageMap[href] = spineIndex
+
+                                            val content = ref.resource.reader.readText()
+                                            val basePath = ref.resource.href.substringBeforeLast("/", "")
+                                            val bodyRegex = Regex(
+                                                "<body[^>]*>(.*?)</body>",
+                                                setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+                                            )
+                                            val match = bodyRegex.find(content)
+                                            val body = match?.groupValues?.get(1) ?: content
+
+                                            allPages.add(ReaderPage(wrapInTemplate(body, bgHex, textHex), basePath))
+                                        } catch (_: Exception) {
+                                            Log.e("BookViewModel", "Error loading chapter $spineIndex")
                                         }
                                     }
-                                )
-                                pdfNavigatorFactory = PdfNavigatorFactory(publication, engineProvider)
-                                readerToc = flattenToc(publication, publication.tableOfContents)
-                                loadBookmarks(currentBook?.id ?: -1)
-                            }
-                            Pair(publication as Any, emptyList<ReaderPage>())
-                        } else if (publicationResult is Failure) {
-                            val error = publicationResult.value
-                            Log.e("BookViewModel", "Readium PDF opening failed: $error")
-                            withContext(Dispatchers.Main) {
-                                readerError = error.toString()
-                                currentPublication = null
-                                epubNavigatorFactory = null
-                                pdfNavigatorFactory = null
-                            }
-                            // Fallback to legacy PDF handling if Readium fails
-                            val pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
-                            val renderer = PdfRenderer(pfd)
-                            val pageCount = renderer.pageCount
-                            renderer.close()
-                            pfd.close()
 
-                            val dummyPages = List(pageCount) { ReaderPage("", null) }
-                            Pair(pageCount as Any, dummyPages)
-                        } else {
-                            Pair(0 as Any, emptyList<ReaderPage>())
+                                    val finalToc = toc.mapIndexed { index, item ->
+                                        val resHref = tocResourceHrefs[index].trimStart('/')
+                                        val spineIdx = loadedEpub.spine.spineReferences.indexOfFirst {
+                                            val sHref = it.resource.href.trimStart('/')
+                                            sHref == resHref || sHref == Uri.decode(resHref)
+                                        }
+                                        item.copy(pageIndex = spineIdx)
+                                    }
+
+                                    withContext(Dispatchers.Main) {
+                                        readerToc = finalToc
+                                        hrefToPageMap = tempHrefToPageMap
+                                    }
+                                    Pair(loadedEpub as Any, allPages)
+                                }
+                            }
                         }
-                    } else {
-                        throw Exception("Unsupported format")
+                        "mobi", "azw3" -> {
+                            val mobiData = MobiExtractor.extractText(app, file)
+                            val bodyRegex = Regex("<body[^>]*>(.*?)</body>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                            val match = bodyRegex.find(mobiData.text)
+                            val innerBody = match?.groupValues?.get(1) ?: mobiData.text
+
+                            val chapters = innerBody.split(Regex("(?i)<h[1-2][^>]*>"))
+                            val generatedPages = mutableListOf<ReaderPage>()
+
+                            if (chapters.size > 1) {
+                                chapters.forEachIndexed { index, content ->
+                                    if (content.isNotBlank()) {
+                                        val prefix = if (index > 0) "<h2>" else ""
+                                        generatedPages.add(ReaderPage(wrapInTemplate(prefix + content, bgHex, textHex), ""))
+                                    }
+                                }
+                            } else {
+                                generatedPages.add(ReaderPage(wrapInTemplate(innerBody, bgHex, textHex), ""))
+                            }
+
+                            Pair(mobiData, generatedPages)
+                        }
+                        "pdf" -> {
+                            currentPublication?.close()
+                            val assetRetriever = AssetRetriever(app.contentResolver, DefaultHttpClient())
+                            val publicationOpener = PublicationOpener(
+                                publicationParser = PdfParser(app, pdfFactory = PdfiumDocumentFactory(app)),
+                            )
+                            val publicationResult = withContext(Dispatchers.IO) {
+                                val asset: Asset? = assetRetriever.retrieve(file).getOrNull()
+                                if (asset != null) {
+                                    publicationOpener.open(asset, allowUserInteraction = false)
+                                } else {
+                                    Try.failure(Exception("Asset could not be retrieved."))
+                                }
+                            }
+
+                            when (publicationResult) {
+                                is Success -> {
+                                    val publication = publicationResult.value
+                                    withContext(Dispatchers.Main) {
+                                        currentPublication = publication
+                                        val engineProvider = PdfiumEngineProvider(
+                                            listener = object : PdfiumEngineProvider.Listener {
+                                                override fun onConfigurePdfView(configurator: PDFView.Configurator) {
+                                                    configurator
+                                                        .pageSnap(true)
+                                                        .pageFling(true)
+                                                        .autoSpacing(true)
+                                                }
+                                            }
+                                        )
+                                        pdfNavigatorFactory = PdfNavigatorFactory(publication, engineProvider)
+                                        readerToc = flattenToc(publication, publication.tableOfContents)
+                                        loadBookmarks(currentBook?.id ?: -1)
+                                    }
+                                    Pair(publication as Any, emptyList())
+                                }
+
+                                is Failure -> {
+                                    val error = publicationResult.value
+                                    Log.e("BookViewModel", "Readium PDF opening failed: $error")
+                                    withContext(Dispatchers.Main) {
+                                        readerError = error.toString()
+                                        currentPublication = null
+                                        epubNavigatorFactory = null
+                                        pdfNavigatorFactory = null
+                                    }
+                                    // Fallback to legacy PDF handling if Readium fails
+                                    val pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+                                    val renderer = PdfRenderer(pfd)
+                                    val pageCount = renderer.pageCount
+                                    renderer.close()
+                                    pfd.close()
+
+                                    val dummyPages = List(pageCount) { ReaderPage("", null) }
+                                    Pair(pageCount as Any, dummyPages)
+                                }
+                            }
+                        }
+                        else -> throw Exception("Unsupported format")
                     }
                 }
                 

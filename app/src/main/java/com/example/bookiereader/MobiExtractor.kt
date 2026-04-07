@@ -54,7 +54,7 @@ object MobiExtractor {
             
             Log.d("MobiExtractor", "Compression: $compression, Records: $textRecordCount, Flags: $extraDataFlags, Encoding: $encoding, FirstImageIndex: $firstImageIndex")
 
-            val allBytes = mutableListOf<Byte>()
+            val allBytes = java.io.ByteArrayOutputStream()
             
             // Extract text records (Record 1 to textRecordCount)
             for (idx in 1..textRecordCount) {
@@ -77,9 +77,7 @@ object MobiExtractor {
                     val extraBytes = getExtraBytesCount(decompressed, extraDataFlags)
                     val actualSize = (decompressed.size - extraBytes).coerceAtLeast(0)
                     
-                    for (k in 0 until actualSize) {
-                        allBytes.add(decompressed[k])
-                    }
+                    allBytes.write(decompressed, 0, actualSize)
                 } else if (compression == 17480) {
                     return MobiData(context.getString(R.string.error_huff_cdic_unsupported), null, null)
                 }
@@ -134,14 +132,17 @@ object MobiExtractor {
                         recordsProcessed++
                         val recordType = raf.readInt()
                         val recordLen = raf.readInt()
+                        if (recordLen < 8) break
                         val dataLen = recordLen - 8
-                        if (dataLen > 0) {
+                        if (dataLen > 0 && raf.filePointer + dataLen <= exthOffset + exthLength) {
                             val data = ByteArray(dataLen)
                             raf.read(data)
                             when (recordType) {
                                 501 -> series = String(data, charset)
                                 504 -> seriesIndex = String(data, charset).toFloatOrNull()
                             }
+                        } else if (dataLen > 0) {
+                            break // Safety break
                         }
                     }
                 }
@@ -152,7 +153,7 @@ object MobiExtractor {
     }
 
     private fun getExtraBytesCount(data: ByteArray, flags: Int): Int {
-        if (data.isEmpty()) return 0
+        if (data.isEmpty() || flags == 0) return 0
         var total = 0
         var f = flags
         
@@ -166,7 +167,9 @@ object MobiExtractor {
         f = f shr 1
         while (f > 0) {
             if ((f and 1) != 0) {
-                total += getTrailingDataSize(data, data.size - total)
+                val size = getTrailingDataSize(data, data.size - total)
+                if (size <= 0 || size > data.size - total) break
+                total += size
             }
             f = f shr 1
         }
@@ -203,30 +206,40 @@ data class MobiData(
 
 object PalmDocDecompressor {
     fun decompress(input: ByteArray): ByteArray {
-        val output = ArrayList<Byte>(input.size * 2)
+        var output = ByteArray(input.size * 2)
+        var outIdx = 0
+        
+        fun ensureCapacity(extra: Int) {
+            if (outIdx + extra > output.size) {
+                output = output.copyOf(maxOf(output.size * 2, outIdx + extra))
+            }
+        }
+
         var i = 0
         while (i < input.size) {
             val c = input[i].toInt() and 0xFF
             i++
             
             when {
-                c == 0x00 -> { // Null byte
-                    output.add(0)
+                c == 0x00 -> {
+                    ensureCapacity(1)
+                    output[outIdx++] = 0
                 }
-                c in 1..8 -> { // Literal copy
-                    repeat(c) {
-                        if (i < input.size) {
-                            output.add(input[i])
-                            i++
-                        }
-                    }
+                c in 1..8 -> {
+                    val count = minOf(c, input.size - i)
+                    ensureCapacity(count)
+                    System.arraycopy(input, i, output, outIdx, count)
+                    outIdx += count
+                    i += count
                 }
-                c <= 0x7F -> { // Literal char
-                    output.add(c.toByte())
+                c <= 0x7F -> {
+                    ensureCapacity(1)
+                    output[outIdx++] = c.toByte()
                 }
-                c >= 0xC0 -> { // Space + char
-                    output.add(' '.code.toByte())
-                    output.add((c xor 0x80).toByte())
+                c >= 0xC0 -> {
+                    ensureCapacity(2)
+                    output[outIdx++] = ' '.code.toByte()
+                    output[outIdx++] = (c xor 0x80).toByte()
                 }
                 else -> { // 0x80 to 0xBF: Distance/Length
                     if (i < input.size) {
@@ -237,12 +250,14 @@ object PalmDocDecompressor {
                         val distance = compound shr 3
                         val length = (compound and 0x07) + 3
                         
-                        val start = output.size - distance
+                        ensureCapacity(length)
+                        val start = outIdx - distance
                         if (distance > 0) {
-                            repeat(length) { j ->
+                            for (j in 0 until length) {
                                 val pos = start + j
-                                if (pos >= 0 && pos < output.size) {
-                                    output.add(output[pos])
+                                if (pos >= 0 && pos < outIdx) {
+                                    output[outIdx] = output[pos]
+                                    outIdx++
                                 }
                             }
                         }
@@ -250,8 +265,6 @@ object PalmDocDecompressor {
                 }
             }
         }
-        val result = ByteArray(output.size)
-        for (idx in output.indices) result[idx] = output[idx]
-        return result
+        return output.copyOf(outIdx)
     }
 }

@@ -184,7 +184,7 @@ fun SettingsScreen(viewModel: BookViewModel, onBack: () -> Unit) {
             }
 
             Text(
-                text = "v${BuildConfig.VERSION_NAME}",
+                text = stringResource(R.string.version_label) + " ${BuildConfig.VERSION_NAME}",
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 24.dp),
