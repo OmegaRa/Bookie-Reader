@@ -30,7 +30,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import nl.siegmann.epublib.epub.EpubReader
-import com.tom_roush.pdfbox.pdmodel.PDDocument
 import org.readium.r2.shared.publication.Link
 import org.readium.r2.shared.publication.Locator
 import org.readium.r2.shared.publication.Publication
@@ -45,7 +44,6 @@ import org.readium.r2.navigator.VisualNavigator
 import org.readium.r2.navigator.pdf.PdfNavigatorFactory
 import org.readium.adapter.pdfium.navigator.PdfiumEngineProvider
 import org.readium.adapter.pdfium.document.PdfiumDocumentFactory
-import com.github.barteksc.pdfviewer.PDFView
 import org.readium.r2.shared.util.Try
 import org.readium.r2.shared.util.Try.Success
 import org.readium.r2.shared.util.Try.Failure
@@ -900,16 +898,7 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                                     val publication = publicationResult.value
                                     withContext(Dispatchers.Main) {
                                         currentPublication = publication
-                                        val engineProvider = PdfiumEngineProvider(
-                                            listener = object : PdfiumEngineProvider.Listener {
-                                                override fun onConfigurePdfView(configurator: PDFView.Configurator) {
-                                                    configurator
-                                                        .pageSnap(true)
-                                                        .pageFling(true)
-                                                        .autoSpacing(true)
-                                                }
-                                            }
-                                        )
+                                        val engineProvider = PdfiumEngineProvider()
                                         pdfNavigatorFactory = PdfNavigatorFactory(publication, engineProvider)
                                         readerToc = flattenToc(publication, publication.tableOfContents)
                                         loadBookmarks(currentBook?.id ?: -1)
@@ -1199,12 +1188,21 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     "pdf" -> {
                         try {
-                            PDDocument.load(destFile).use { pdf ->
-                                val info = pdf.documentInformation
-                                author = info.author ?: context.getString(R.string.unknown_author)
+                            val assetRetriever = AssetRetriever(app.contentResolver, DefaultHttpClient())
+                            val publicationOpener = PublicationOpener(
+                                publicationParser = PdfParser(app, pdfFactory = PdfiumDocumentFactory(app)),
+                            )
+                            val asset: Asset? = assetRetriever.retrieve(destFile).getOrNull()
+                            if (asset != null) {
+                                val result = publicationOpener.open(asset, allowUserInteraction = false)
+                                if (result is Success) {
+                                    val publication = result.value
+                                    author = publication.metadata.authors.firstOrNull()?.name ?: app.getString(R.string.unknown_author)
+                                    publication.close()
+                                }
                             }
-                        } catch (_: Exception) {
-                            Log.e("BookViewModel", "Error extracting PDF metadata")
+                        } catch (e: Exception) {
+                            Log.e("BookViewModel", "Error extracting PDF metadata via Readium", e)
                         }
                     }
                 }

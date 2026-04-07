@@ -79,10 +79,10 @@ dependencies {
     implementation(libs.readium.adapter.pdfium)
     implementation(libs.readium.adapter.pdfium.document)
     implementation(libs.readium.adapter.pdfium.navigator)
-    implementation(libs.barteksc.pdf.viewer)
-    implementation(libs.pdfium.android)
-    implementation(libs.pdf.viewer.androidx)
-    implementation(libs.pdfbox.android)
+    // implementation(libs.barteksc.pdf.viewer) // Removed due to conflict with Readium's transitive dependency (marain87 fork)
+    // implementation(libs.pdfium.android)
+    // implementation(libs.pdf.viewer.androidx)
+    // implementation(libs.pdfbox.android) // Replaced by Readium for PDF metadata extraction
 
     // Room Database
     implementation(libs.androidx.room.runtime)
