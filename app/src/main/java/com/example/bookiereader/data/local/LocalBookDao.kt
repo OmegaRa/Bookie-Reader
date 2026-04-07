@@ -17,4 +17,6 @@ interface LocalBookDao {
     @Delete
     suspend fun deleteBook(book: LocalBookEntity)
 
+    @Query("UPDATE local_books SET progress = :progress WHERE id = :bookId")
+    suspend fun updateProgress(bookId: Int, progress: Float)
 }

@@ -51,139 +51,145 @@ fun SettingsScreen(viewModel: BookViewModel, onBack: () -> Unit) {
             )
         }
     ) { padding ->
-        Column(
+        Box(
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp)
         ) {
-            // Appearance Section
-            SettingsHeader(stringResource(R.string.appearance_header))
-            
-            Surface(
-                color = colorScheme.surface,
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp)
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Default.Palette,
-                            contentDescription = null,
-                            tint = colorScheme.onSurface.copy(alpha = 0.6f),
-                            modifier = Modifier.size(24.dp)
+                // Appearance Section
+                SettingsHeader(stringResource(R.string.appearance_header))
+                
+                Surface(
+                    color = colorScheme.surface,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Default.Palette,
+                                contentDescription = null,
+                                tint = colorScheme.onSurface.copy(alpha = 0.6f),
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Text(
+                                stringResource(R.string.theme_label),
+                                modifier = Modifier.padding(start = 16.dp),
+                                color = colorScheme.onSurface,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                        
+                        Spacer(modifier = Modifier.height(12.dp))
+                        
+                        val themeOptions = listOf(
+                            "System" to stringResource(R.string.theme_system),
+                            "Light" to stringResource(R.string.theme_light),
+                            "Dark" to stringResource(R.string.theme_dark)
                         )
-                        Text(
-                            stringResource(R.string.theme_label),
-                            modifier = Modifier.padding(start = 16.dp),
-                            color = colorScheme.onSurface,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                    
-                    Spacer(modifier = Modifier.height(12.dp))
-                    
-                    val themeOptions = listOf(
-                        "System" to stringResource(R.string.theme_system),
-                        "Light" to stringResource(R.string.theme_light),
-                        "Dark" to stringResource(R.string.theme_dark)
-                    )
-                    
-                    themeOptions.chunked(3).forEachIndexed { index, rowOptions ->
-                        if (index > 0) Spacer(Modifier.height(8.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            rowOptions.forEach { (value, label) ->
-                                FilterChip(
-                                    modifier = Modifier.weight(1f),
-                                    selected = viewModel.themeMode == value,
-                                    onClick = { viewModel.updateThemeMode(value) },
-                                    label = { 
-                                        Text(
-                                            label, 
-                                            modifier = Modifier.fillMaxWidth(), 
-                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                                            fontSize = 13.sp
-                                        ) 
-                                    }
-                                )
+                        
+                        themeOptions.chunked(3).forEachIndexed { index, rowOptions ->
+                            if (index > 0) Spacer(Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                rowOptions.forEach { (value, label) ->
+                                    FilterChip(
+                                        modifier = Modifier.weight(1f),
+                                        selected = viewModel.themeMode == value,
+                                        onClick = { viewModel.updateThemeMode(value) },
+                                        label = { 
+                                            Text(
+                                                label, 
+                                                modifier = Modifier.fillMaxWidth(), 
+                                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                                fontSize = 13.sp
+                                            ) 
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-            // Library Section
-            SettingsHeader(stringResource(R.string.library_header))
-            
-            SettingsItem(
-                title = stringResource(R.string.server_url_label),
-                subtitle = viewModel.baseUrl.ifEmpty { stringResource(R.string.not_connected) },
-                icon = Icons.Default.Dns
-            )
+                // Library Section
+                SettingsHeader(stringResource(R.string.library_header))
+                
+                SettingsItem(
+                    title = stringResource(R.string.server_url_label),
+                    subtitle = viewModel.baseUrl.ifEmpty { stringResource(R.string.not_connected) },
+                    icon = Icons.Default.Dns
+                )
 
-            Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-            // Local Books Section
-            SettingsHeader(stringResource(R.string.local_storage_header))
-            
-            Surface(
-                onClick = { 
-                    launcher.launch(arrayOf("application/epub+zip", "application/pdf"))
-                },
-                color = colorScheme.surface,
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                // Local Books Section
+                SettingsHeader(stringResource(R.string.local_storage_header))
+                
+                Surface(
+                    onClick = { 
+                        launcher.launch(arrayOf("application/epub+zip", "application/pdf"))
+                    },
+                    color = colorScheme.surface,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(40.dp)
-                            .background(colorScheme.primary.copy(alpha = 0.1f), RoundedCornerShape(8.dp)),
-                        contentAlignment = Alignment.Center
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.FolderOpen, contentDescription = null, tint = colorScheme.primary)
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .background(colorScheme.primary.copy(alpha = 0.1f), RoundedCornerShape(8.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.FolderOpen, contentDescription = null, tint = colorScheme.primary)
+                        }
+                        
+                        Column(
+                            modifier = Modifier
+                                .padding(horizontal = 16.dp)
+                                .weight(1f)
+                        ) {
+                            Text(
+                                stringResource(R.string.import_books_label),
+                                color = colorScheme.onSurface,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                stringResource(R.string.import_books_desc),
+                                color = colorScheme.onSurface.copy(alpha = 0.6f),
+                                fontSize = 13.sp
+                            )
+                        }
+                        
+                        Icon(Icons.Default.Add, contentDescription = null, tint = colorScheme.onSurface.copy(alpha = 0.6f))
                     }
-                    
-                    Column(
-                        modifier = Modifier
-                            .padding(horizontal = 16.dp)
-                            .weight(1f)
-                    ) {
-                        Text(
-                            stringResource(R.string.import_books_label),
-                            color = colorScheme.onSurface,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            stringResource(R.string.import_books_desc),
-                            color = colorScheme.onSurface.copy(alpha = 0.6f),
-                            fontSize = 13.sp
-                        )
-                    }
-                    
-                    Icon(Icons.Default.Add, contentDescription = null, tint = colorScheme.onSurface.copy(alpha = 0.6f))
                 }
+
+                Spacer(modifier = Modifier.height(64.dp))
             }
 
-            Spacer(modifier = Modifier.height(32.dp))
-
-            // About Section
-            SettingsHeader(stringResource(R.string.about_header))
-            SettingsItem(
-                title = stringResource(R.string.version_label),
-                subtitle = stringResource(R.string.version_value),
-                icon = Icons.Default.Info
+            Text(
+                text = "v${BuildConfig.VERSION_NAME}",
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 24.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = colorScheme.onSurface.copy(alpha = 0.4f)
             )
         }
     }

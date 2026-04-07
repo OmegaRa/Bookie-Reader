@@ -13,5 +13,6 @@ data class LocalBookEntity(
     val series: String? = null,
     val seriesOrder: Double? = null,
     val tags: String? = null, // Stored as comma-separated string
-    val lastPageIndex: Int = 0
+    val lastPageIndex: Int = 0,
+    val progress: Float? = null
 )

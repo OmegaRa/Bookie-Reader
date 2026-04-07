@@ -1,6 +1,5 @@
 package com.example.bookiereader
 
-import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -48,7 +47,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
-import coil.ImageLoader
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.bookiereader.data.Book
@@ -151,7 +149,7 @@ fun BookListScreen(
                         if (viewModel.isUpdateAvailable) {
                             IconButton(onClick = {
                                 viewModel.updateUrl?.let { url ->
-                                    val intent = Intent(Intent.ACTION_VIEW, url.toUri())
+                                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, url.toUri())
                                     context.startActivity(intent)
                                 }
                             }) {
@@ -402,11 +400,12 @@ fun BookGridItem(
     val accentColor = colorScheme.primary
     var showMenu by remember { mutableStateOf(false) }
     
-    val imageLoader = viewModel.okHttpClient?.let {
-        ImageLoader.Builder(context).okHttpClient(it).build()
-    } ?: ImageLoader(context)
-
-    val coverUrl = "${viewModel.baseUrl}books/${book.id}/cover"
+    val application = LocalContext.current.applicationContext as BookieReaderApplication
+    val imageLoader = application.imageLoader
+    
+    // The baseUrl usually ends in "/api/", and cover is at /api/books/{id}/cover
+    val coverUrl = viewModel.baseUrl + "books/" + book.id + "/cover" + 
+        if (viewModel.sessionCacheBuster.isNotEmpty()) "?v=${viewModel.sessionCacheBuster}" else ""
     
     Column(
         modifier = Modifier
@@ -435,7 +434,7 @@ fun BookGridItem(
                     .crossfade(true)
                     .build(),
                 imageLoader = imageLoader,
-                contentDescription = null,
+                contentDescription = book.title,
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(0.7f)
@@ -522,6 +521,16 @@ fun BookGridItem(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+            
+            if (book.progress != null && book.progress > 0f) {
+                Spacer(modifier = Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    progress = { book.progress },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = accentColor,
+                    trackColor = accentColor.copy(alpha = 0.2f)
+                )
+            }
         }
     }
 }
@@ -541,12 +550,13 @@ fun BookListItem(
     val accentColor = colorScheme.primary
     var showMenu by remember { mutableStateOf(false) }
     
-    val imageLoader = viewModel.okHttpClient?.let {
-        ImageLoader.Builder(context).okHttpClient(it).build()
-    } ?: ImageLoader(context)
-
-    val coverUrl = "${viewModel.baseUrl}books/${book.id}/cover"
-
+    val application = LocalContext.current.applicationContext as BookieReaderApplication
+    val imageLoader = application.imageLoader
+    
+    // The baseUrl usually ends in "/api/", and cover is at /api/books/{id}/cover
+    val coverUrl = viewModel.baseUrl + "books/" + book.id + "/cover" +
+        if (viewModel.sessionCacheBuster.isNotEmpty()) "?v=${viewModel.sessionCacheBuster}" else ""
+    
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -625,6 +635,16 @@ fun BookListItem(
                 style = MaterialTheme.typography.labelSmall,
                 color = accentColor
             )
+
+            if (book.progress != null && book.progress > 0f) {
+                Spacer(modifier = Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    progress = { book.progress },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = accentColor,
+                    trackColor = accentColor.copy(alpha = 0.2f)
+                )
+            }
         }
         
         Box {

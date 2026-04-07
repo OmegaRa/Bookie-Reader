@@ -8,7 +8,9 @@ import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
 import android.util.Base64
 import android.util.Log
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
@@ -42,6 +44,9 @@ import org.readium.r2.navigator.pdf.PdfNavigatorFactory
 import org.readium.adapter.pdfium.navigator.PdfiumEngineProvider
 import org.readium.adapter.pdfium.document.PdfiumDocumentFactory
 import com.github.barteksc.pdfviewer.PDFView
+import org.readium.r2.shared.util.Try
+import org.readium.r2.shared.util.Try.Success
+import org.readium.r2.shared.util.Try.Failure
 import org.readium.r2.shared.ExperimentalReadiumApi
 import com.google.gson.reflect.TypeToken
 import org.json.JSONObject
@@ -63,7 +68,8 @@ data class TocItem(
     val title: String,
     val href: String,
     val level: Int = 0,
-    val pageIndex: Int = -1
+    val pageIndex: Int = -1,
+    val locatorJson: String? = null
 )
 
 @OptIn(ExperimentalReadiumApi::class)
@@ -124,6 +130,9 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
     var okHttpClient: OkHttpClient? by mutableStateOf(null)
         private set
 
+    var sessionCacheBuster by mutableStateOf("")
+        private set
+
     var currentBookFile by mutableStateOf<File?>(null)
     var currentBook by mutableStateOf<Book?>(null)
     
@@ -134,28 +143,32 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
     var currentPageIndex by mutableStateOf(0)
     var currentProgression by mutableStateOf<Double?>(null)
 
-    // New state for dynamic pagination
-    var chapterPageCounts by mutableStateOf<Map<Int, Int>>(emptyMap())
+    // New state for dynamic pagination - Use SnapshotStateMap for more granular updates
+    val chapterPageCounts = mutableStateMapOf<Int, Int>()
 
-    val totalPagesCount: Int
-        get() {
-            if (readerPages.isEmpty()) return 0
+    // Cache for total pages to avoid frequent recalculation
+    private var _cachedTotalPages = derivedStateOf {
+        if (readerPages.isEmpty()) 0
+        else {
             var total = 0
             for (i in readerPages.indices) {
                 total += chapterPageCounts[i] ?: 1
             }
-            return maxOf(1, total)
+            maxOf(1, total)
         }
+    }
+
+    val totalPagesCount: Int get() = _cachedTotalPages.value
 
     fun getChapterAndPage(globalIndex: Int): Pair<Int, Int> {
         if (readerPages.isEmpty()) {
             return 0 to 0
         }
-        if (chapterPageCounts.isEmpty() || chapterPageCounts.size < readerPages.size) {
-            return globalIndex.coerceIn(0, readerPages.size - 1) to 0
-        }
+        
+        // Optimize: If we have many chapters, this linear search could be slow.
+        // But for most books it's acceptable. We use the map directly.
         var count = 0
-        for (i in 0 until readerPages.size) {
+        for (i in readerPages.indices) {
             val pagesInChapter = chapterPageCounts[i] ?: 1
             if (globalIndex < count + pagesInChapter) {
                 return i to (globalIndex - count)
@@ -178,7 +191,7 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateChapterPageCount(chapterIndex: Int, count: Int) {
         if (chapterPageCounts[chapterIndex] != count) {
-            chapterPageCounts = chapterPageCounts + (chapterIndex to count)
+            chapterPageCounts[chapterIndex] = count
         }
     }
     
@@ -228,12 +241,18 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
     var pdfNavigator: VisualNavigator? by mutableStateOf(null)
         private set
 
-    private fun flattenToc(links: List<Link>, level: Int = 0): List<TocItem> {
+    private fun flattenToc(publication: Publication, links: List<Link>, level: Int = 0): List<TocItem> {
         val result = mutableListOf<TocItem>()
         for (link in links) {
-            result.add(TocItem(link.title ?: "Untitled", link.href.toString(), level))
+            val locator = publication.locatorFromLink(link)
+            result.add(TocItem(
+                title = link.title ?: "Untitled",
+                href = link.href.toString(),
+                level = level,
+                locatorJson = locator?.toJSON()?.toString()
+            ))
             if (link.children.isNotEmpty()) {
-                result.addAll(flattenToc(link.children, level + 1))
+                result.addAll(flattenToc(publication, link.children, level + 1))
             }
         }
         return result
@@ -255,11 +274,59 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
         saveBookmarks()
     }
 
-    fun saveReadingProgress(locator: Locator) {
-        val bookId = currentBook?.id ?: return
-        prefs.edit {
-            putString("last_locator_$bookId", locator.toJSON().toString())
+    private fun saveProgressInternal(bookId: Int, progress: Float, locator: Locator?) {
+        viewModelScope.launch(Dispatchers.IO) {
+            localBookDao.updateProgress(bookId, progress)
+            // Also update the in-memory list so the UI refreshes immediately
+            withContext(Dispatchers.Main) {
+                localBooks = localBooks.map { 
+                    if (it.id == bookId) it.copy(progress = progress) else it 
+                }
+                books = books.map { 
+                    if (it.id == bookId) it.copy(progress = progress) else it 
+                }
+                if (currentBook?.id == bookId) {
+                    currentBook = currentBook?.copy(progress = progress)
+                }
+            }
+            
+            // For remote books, we'd eventually want to sync this to the server
+            // For now, we'll store it in preferences as well
+            prefs.edit { 
+                putFloat("book_progress_$bookId", progress)
+                locator?.let {
+                    putString("last_locator_$bookId", it.toJSON().toString())
+                }
+            }
         }
+    }
+
+    fun saveReadingProgress(locator: Locator, fallbackProgress: Double? = null) {
+        val bookId = currentBook?.id ?: return
+        val progress = locator.locations.totalProgression ?: fallbackProgress ?: 0.0
+        currentProgression = progress
+        saveProgressInternal(bookId, progress.toFloat(), locator)
+    }
+
+    fun calculateFallbackProgress(publication: Publication?, locator: Locator): Double {
+        if (publication == null) return 0.0
+        val readingOrder = publication.readingOrder
+        val currentHref = locator.href.toString().removePrefix("/")
+        val currentIndex = readingOrder.indexOfFirst { 
+            val linkHref = it.href.toString().removePrefix("/")
+            linkHref == currentHref || linkHref.endsWith("/$currentHref") || currentHref.endsWith("/$linkHref")
+        }.coerceAtLeast(0)
+        val chapterProgress = locator.locations.progression ?: 0.0
+        return (currentIndex + chapterProgress) / readingOrder.size.toDouble()
+    }
+
+    fun saveLegacyProgress(bookId: Int, progress: Double) {
+        currentProgression = progress
+        saveProgressInternal(bookId, progress.toFloat(), null)
+    }
+
+    fun getLegacyProgress(bookId: Int): Double {
+        return prefs.getFloat("book_progress_$bookId", 0f).toDouble()
     }
 
     fun getLastLocator(bookId: Int): Locator? {
@@ -380,6 +447,7 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val entities = localBookDao.getAllBooks()
             localBooks = entities.map { entity ->
+                val savedProgress = prefs.getFloat("book_progress_${entity.id}", -1f)
                 Book(
                     id = entity.id,
                     title = entity.title,
@@ -389,7 +457,8 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                     coverUrl = null,
                     series = entity.series,
                     seriesOrder = entity.seriesOrder,
-                    tags = entity.tags?.split(",")?.filter { it.isNotBlank() }
+                    tags = entity.tags?.split(",")?.filter { it.isNotBlank() },
+                    progress = if (savedProgress >= 0f) savedProgress else entity.progress
                 )
             }
         }
@@ -429,6 +498,31 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
         return formatted
     }
 
+    private fun createHttpClient(cookieJar: CookieJar): OkHttpClient {
+        val logging = HttpLoggingInterceptor().apply {
+            level = HttpLoggingInterceptor.Level.BODY
+        }
+
+        return OkHttpClient.Builder()
+            .addInterceptor(logging)
+            .cookieJar(cookieJar)
+            .addInterceptor { chain ->
+                val request = chain.request()
+                val newRequestBuilder = request.newBuilder()
+                
+                // Only add application/json if we're not requesting an image
+                val path = request.url.encodedPath
+                if (path.startsWith("/api/") && !path.contains("/cover") && !path.contains("/image")) {
+                    newRequestBuilder.header("Accept", "application/json")
+                } else if (path.contains("/cover") || path.contains("/image")) {
+                    newRequestBuilder.header("Accept", "image/*")
+                }
+                
+                chain.proceed(newRequestBuilder.build())
+            }
+            .build()
+    }
+
     private fun setupClientAndFetch(url: String, sessionCookie: String?) {
         val formattedUrl = formatBaseUrl(url)
         val httpUrl = formattedUrl.toHttpUrlOrNull()
@@ -461,22 +555,11 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
-        }
-
-        val client = OkHttpClient.Builder()
-            .addInterceptor(logging)
-            .cookieJar(cookieJar)
-            .addInterceptor { chain ->
-                val request = chain.request().newBuilder()
-                    .header("Accept", "application/json")
-                    .build()
-                chain.proceed(request)
-            }
-            .build()
+        val client = createHttpClient(cookieJar)
         
         okHttpClient = client
+        sessionCacheBuster = System.currentTimeMillis().toString()
+        (app as? BookieReaderApplication)?.updateAuthenticatedClient(client)
 
         val gson = GsonBuilder().create()
         val retrofit = Retrofit.Builder()
@@ -496,14 +579,25 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                 
                 do {
                     val response = service.getBooks(page = currentPage, perPage = 100)
-                    allFetchedBooks.addAll(response.books)
+                    val booksWithProgress = response.books.map { book ->
+                        val savedProgress = prefs.getFloat("book_progress_${book.id}", -1f)
+                        if (savedProgress >= 0f) {
+                            book.copy(progress = savedProgress)
+                        } else {
+                            book
+                        }
+                    }
+                    allFetchedBooks.addAll(booksWithProgress)
                     totalBooks = response.total
                     currentPage++
                 } while (allFetchedBooks.size < totalBooks && response.books.isNotEmpty())
                 
                 books = allFetchedBooks
             } catch (_: Exception) {
-                prefs.edit { clear() }
+                prefs.edit { 
+                    remove("base_url")
+                    remove("session_cookie")
+                }
                 errorMessage = app.getString(R.string.session_expired)
             } finally {
                 isLoading = false
@@ -530,7 +624,7 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                     override fun loadForRequest(url: HttpUrl): List<Cookie> = cookieStore[url.host] ?: emptyList()
                 }
 
-                val client = OkHttpClient.Builder().cookieJar(cookieJar).build()
+                val client = createHttpClient(cookieJar)
                 val retrofit = Retrofit.Builder()
                     .baseUrl(formattedUrl)
                     .addConverterFactory(GsonConverterFactory.create(GsonBuilder().create()))
@@ -543,6 +637,8 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                 if (loginResponse.isSuccessful) {
                     saveCredentials(formattedUrl, "") // Initial save, cookie is saved via CookieJar
                     okHttpClient = client
+                    sessionCacheBuster = System.currentTimeMillis().toString()
+                    (app as? BookieReaderApplication)?.updateAuthenticatedClient(client)
                     
                     var currentPage = 1
                     val allFetchedBooks = mutableListOf<Book>()
@@ -656,6 +752,7 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
             currentMobiData = null
             readerPages = emptyList()
             readerToc = emptyList()
+            chapterPageCounts.clear()
         }
 
         preparationJob = viewModelScope.launch(Dispatchers.IO) {
@@ -676,27 +773,34 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                         val publicationOpener = PublicationOpener(
                             publicationParser = EpubParser(),
                         )
-                        val publication = try {
+                        val publicationResult = withContext(Dispatchers.IO) {
+                            currentPublication?.close()
                             val asset: Asset? = assetRetriever.retrieve(file).getOrNull()
                             if (asset != null) {
-                                publicationOpener.open(asset, allowUserInteraction = false).getOrNull()
+                                publicationOpener.open(asset, allowUserInteraction = false)
                             } else {
-                                null
+                                Try.failure(Exception("Asset could not be retrieved."))
                             }
-                        } catch (_: Exception) {
-                            Log.e("BookViewModel", "Error opening EPUB with Readium")
-                            null
                         }
 
-                        if (publication != null) {
+                        if (publicationResult is Success) {
+                            val publication = publicationResult.value
                             withContext(Dispatchers.Main) {
                                 currentPublication = publication
                                 epubNavigatorFactory = EpubNavigatorFactory(publication)
-                                readerToc = flattenToc(publication.tableOfContents)
+                                readerToc = flattenToc(publication, publication.tableOfContents)
                                 loadBookmarks(currentBook?.id ?: -1)
                             }
-                            Pair(publication, emptyList<ReaderPage>())
+                            Pair(publication as Any, emptyList<ReaderPage>())
                         } else {
+                            val error = (publicationResult as Failure).value
+                            Log.e("BookViewModel", "Readium EPUB opening failed: $error")
+                            withContext(Dispatchers.Main) {
+                                readerError = error.toString()
+                                currentPublication = null
+                                epubNavigatorFactory = null
+                                pdfNavigatorFactory = null
+                            }
                             val reader = EpubReader()
                             val loadedEpub = reader.readEpub(file.inputStream())
                             val toc = mutableListOf<TocItem>()
@@ -739,7 +843,7 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                                 readerToc = finalToc
                                 hrefToPageMap = tempHrefToPageMap
                             }
-                            Pair(loadedEpub, allPages)
+                            Pair(loadedEpub as Any, allPages)
                         }
                     } else if (format == "mobi" || format == "azw3") {
                         val mobiData = MobiExtractor.extractText(app, file)
@@ -763,23 +867,22 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                         
                         Pair(mobiData, generatedPages)
                     } else if (format == "pdf") {
+                        currentPublication?.close()
                         val assetRetriever = AssetRetriever(app.contentResolver, DefaultHttpClient())
                         val publicationOpener = PublicationOpener(
                             publicationParser = PdfParser(app, pdfFactory = PdfiumDocumentFactory(app)),
                         )
-                        val publication = try {
+                        val publicationResult = withContext(Dispatchers.IO) {
                             val asset: Asset? = assetRetriever.retrieve(file).getOrNull()
                             if (asset != null) {
-                                publicationOpener.open(asset, allowUserInteraction = false).getOrNull()
+                                publicationOpener.open(asset, allowUserInteraction = false)
                             } else {
-                                null
+                                Try.failure(Exception("Asset could not be retrieved."))
                             }
-                        } catch (e: Exception) {
-                            Log.e("BookViewModel", "Error opening PDF with Readium", e)
-                            null
                         }
 
-                        if (publication != null) {
+                        if (publicationResult is Success) {
+                            val publication = publicationResult.value
                             withContext(Dispatchers.Main) {
                                 currentPublication = publication
                                 val engineProvider = PdfiumEngineProvider(
@@ -793,11 +896,19 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                                     }
                                 )
                                 pdfNavigatorFactory = PdfNavigatorFactory(publication, engineProvider)
-                                readerToc = flattenToc(publication.tableOfContents)
+                                readerToc = flattenToc(publication, publication.tableOfContents)
                                 loadBookmarks(currentBook?.id ?: -1)
                             }
-                            Pair(publication, emptyList<ReaderPage>())
-                        } else {
+                            Pair(publication as Any, emptyList<ReaderPage>())
+                        } else if (publicationResult is Failure) {
+                            val error = publicationResult.value
+                            Log.e("BookViewModel", "Readium PDF opening failed: $error")
+                            withContext(Dispatchers.Main) {
+                                readerError = error.toString()
+                                currentPublication = null
+                                epubNavigatorFactory = null
+                                pdfNavigatorFactory = null
+                            }
                             // Fallback to legacy PDF handling if Readium fails
                             val pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
                             val renderer = PdfRenderer(pfd)
@@ -806,7 +917,9 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                             pfd.close()
 
                             val dummyPages = List(pageCount) { ReaderPage("", null) }
-                            Pair(pageCount, dummyPages)
+                            Pair(pageCount as Any, dummyPages)
+                        } else {
+                            Pair(0 as Any, emptyList<ReaderPage>())
                         }
                     } else {
                         throw Exception("Unsupported format")
@@ -829,7 +942,7 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                         currentEpubBook = null
                         readerToc = emptyList()
                     }
-                    chapterPageCounts = emptyMap() // Reset pagination info
+                    chapterPageCounts.clear() // Reset pagination info
                     readerPages = finalPages
                     lastPreparedParams = currentParams
                 }
@@ -963,9 +1076,8 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                     
                     window.onload = function() {
                         reportPageCount();
-                        setTimeout(reportPageCount, 300);
-                        setTimeout(reportPageCount, 1000);
-                        setTimeout(reportPageCount, 3000);
+                        setTimeout(reportPageCount, 500);
+                        setTimeout(reportPageCount, 2000);
                     };
                     
                     window.addEventListener('resize', reportPageCount);

@@ -81,10 +81,9 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
     val context = LocalContext.current
     val file = viewModel.currentBookFile
     val book = viewModel.currentBook
-    
     val readerTheme = viewModel.readerTheme
     val systemColorScheme = MaterialTheme.colorScheme
-    
+
     // UI Colors - These follow the theme and system settings
     val (uiBg, uiText) = remember(readerTheme, systemColorScheme) {
         when (readerTheme) {
@@ -117,51 +116,97 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
     val isReaderLoading = viewModel.isReaderLoading
     val toc = viewModel.readerToc
     val bookmarks = viewModel.bookmarks
-    var currentNavigator by remember { mutableStateOf<VisualNavigator?>(null) }
+    var currentNavigator by remember(book?.id) { mutableStateOf<VisualNavigator?>(null) }
+    var isRestoring by remember(book?.id) { mutableStateOf(true) }
 
     LaunchedEffect(currentNavigator) {
         currentNavigator?.currentLocator?.collect { locator ->
-            viewModel.currentProgression = locator.locations.totalProgression
-            viewModel.saveReadingProgress(locator)
-            // For PDF, position is usually the 1-indexed page number
-            locator.locations.position?.let {
-                viewModel.currentPageIndex = it - 1
+            if (isRestoring) return@collect
+
+            val totalProgression = locator.locations.totalProgression
+            if (totalProgression != null) {
+                viewModel.currentProgression = totalProgression
+                viewModel.saveReadingProgress(locator)
+            } else {
+                val fallback = viewModel.calculateFallbackProgress(viewModel.currentPublication, locator)
+                viewModel.currentProgression = fallback
+                viewModel.saveReadingProgress(locator, fallback)
             }
+            // For PDF, position is usually the 1-indexed page number
+            locator.locations.position?.let { viewModel.currentPageIndex = it - 1 }
         }
     }
 
     val format = book?.format?.lowercase() ?: ""
-    
+
     // Use key(book?.id) to force reset pagerState when book changes.
     val pagerState = key(book?.id) {
         rememberPagerState(pageCount = { viewModel.totalPagesCount })
     }
+
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
-    
     var showControls by remember { mutableStateOf(true) }
     var showSettings by remember { mutableStateOf(false) }
     val bookmarkToDeleteState = remember { mutableStateOf<Locator?>(null) }
     val bookmarkToDelete = bookmarkToDeleteState.value
 
     // Track the last stable position to maintain it during pagination updates
-    var lastStableChapter by remember { mutableIntStateOf(0) }
-    var lastStablePageInChapter by remember { mutableIntStateOf(0) }
-    var isInitialLoad by remember { mutableStateOf(true) }
+    var lastStableChapter by remember(book?.id) { mutableIntStateOf(0) }
+    var lastStablePageInChapter by remember(book?.id) { mutableIntStateOf(0) }
+
+    // Track if we have already restored the position for the current book
+    var hasRestoredInitialPosition by remember(book?.id) { mutableStateOf(false) }
 
     // Update stable position when user finishes scrolling
     LaunchedEffect(pagerState.currentPage, pagerState.isScrollInProgress) {
-        if (!pagerState.isScrollInProgress) {
+        if (!pagerState.isScrollInProgress && hasRestoredInitialPosition) {
             val (c, p) = viewModel.getChapterAndPage(pagerState.currentPage)
             lastStableChapter = c
             lastStablePageInChapter = p
-            isInitialLoad = false
+            
+            // Save progress for legacy formats
+            if (!isRestoring && currentNavigator == null && viewModel.totalPagesCount > 1) {
+                val progress = pagerState.currentPage.toDouble() / (viewModel.totalPagesCount - 1).toDouble()
+                book?.id?.let { viewModel.saveLegacyProgress(it, progress) }
+            }
         }
     }
 
-    // Adjust pager when page counts change to prevent jumping
+    // Initial position restoration logic
+    LaunchedEffect(book?.id, currentNavigator) {
+        if (currentNavigator == null) {
+            // Legacy/Mobi path
+            val progress = book?.id?.let { viewModel.getLegacyProgress(it) } ?: 0.0
+            if (progress > 0.0) {
+                // Wait for at least some pages to be loaded/calculated if possible
+                var attempts = 0
+                while (viewModel.totalPagesCount <= 1 && attempts < 10) {
+                    delay(100)
+                    attempts++
+                }
+                
+                if (viewModel.totalPagesCount > 1) {
+                    val targetPage = (progress * (viewModel.totalPagesCount - 1)).toInt().coerceIn(0, viewModel.totalPagesCount - 1)
+                    pagerState.scrollToPage(targetPage)
+                    val (c, p) = viewModel.getChapterAndPage(targetPage)
+                    lastStableChapter = c
+                    lastStablePageInChapter = p
+                }
+            }
+            hasRestoredInitialPosition = true
+            isRestoring = false
+        } else {
+            // Readium path - it handles its own restoration via initialLocator
+            delay(1000) // Stability delay
+            hasRestoredInitialPosition = true
+            isRestoring = false
+        }
+    }
+
+    // Adjust pager when page counts change to prevent jumping (Pagination Stability)
     LaunchedEffect(viewModel.chapterPageCounts) {
-        if (!isInitialLoad && viewModel.readerError == null && viewModel.readerPages.isNotEmpty()) {
+        if (hasRestoredInitialPosition && !isRestoring && currentNavigator == null && viewModel.readerPages.isNotEmpty()) {
             val newGlobalIndex = viewModel.getGlobalIndex(lastStableChapter, lastStablePageInChapter)
             if (newGlobalIndex != pagerState.currentPage && newGlobalIndex < viewModel.totalPagesCount) {
                 pagerState.scrollToPage(newGlobalIndex)
@@ -198,7 +243,6 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                 drawerContentColor = Color(uiText)
             ) {
                 HorizontalDivider()
-                
                 if (bookmarks.isNotEmpty()) {
                     Text(
                         "Bookmarks",
@@ -221,9 +265,7 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                                         currentNavigator?.go(locator, animated = true)
                                         scope.launch { drawerState.close() }
                                     },
-                                    onLongClick = {
-                                        bookmarkToDeleteState.value = locator
-                                    }
+                                    onLongClick = { bookmarkToDeleteState.value = locator }
                                 ),
                                 colors = NavigationDrawerItemDefaults.colors(
                                     unselectedTextColor = Color(uiText),
@@ -243,7 +285,7 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
                     itemsIndexed(toc) { _, item ->
                         NavigationDrawerItem(
-                            label = { 
+                            label = {
                                 Text(
                                     item.title,
                                     modifier = Modifier.padding(start = (item.level * 16).dp)
@@ -252,11 +294,16 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                             selected = false,
                             onClick = {
                                 if (format == "epub" || format == "pdf") {
-                                    val link = viewModel.currentPublication?.linkWithHref(org.readium.r2.shared.util.Url(item.href)!!)
-                                    if (link != null) {
-                                        val locator = viewModel.currentPublication?.locatorFromLink(link)
-                                        if (locator != null) {
-                                            currentNavigator?.go(locator, animated = true)
+                                    val itemLocator = item.locatorJson?.let { Locator.fromJSON(org.json.JSONObject(it)) }
+                                    if (itemLocator != null) {
+                                        currentNavigator?.go(itemLocator, animated = true)
+                                    } else {
+                                        val link = viewModel.currentPublication?.linkWithHref(org.readium.r2.shared.util.Url(item.href)!!)
+                                        if (link != null) {
+                                            val locator = viewModel.currentPublication?.locatorFromLink(link)
+                                            if (locator != null) {
+                                                currentNavigator?.go(locator, animated = true)
+                                            }
                                         }
                                     }
                                 } else {
@@ -325,29 +372,30 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
 
                                     Box(modifier = Modifier.fillMaxSize()) {
                                         var lastScrollMode by remember { mutableStateOf(viewModel.readerScrollMode) }
-                                        
                                         AndroidView(
-                                            factory = { ctx ->
-                                                FragmentContainerView(ctx).apply { id = containerId }
-                                            },
+                                            factory = { ctx -> FragmentContainerView(ctx).apply { id = containerId } },
                                             modifier = Modifier.fillMaxSize(),
                                             update = { _ ->
                                                 val activity = context as? FragmentActivity
                                                 if (activity != null && viewModel.pdfNavigatorFactory != null) {
                                                     val existing = activity.supportFragmentManager.findFragmentById(containerId)
                                                     
-                                                    // If scroll mode changed, we MUST recreate the fragment to avoid NPEs in submitPreferences
+                                                    // If scroll mode changed, we MUST recreate the fragment
                                                     val forceRecreate = lastScrollMode != viewModel.readerScrollMode
                                                     if (forceRecreate) {
                                                         lastScrollMode = viewModel.readerScrollMode
-                                                        existing?.let {
-                                                            activity.supportFragmentManager.beginTransaction().remove(it).commitNow()
+                                                        existing?.let { 
+                                                            activity.supportFragmentManager.beginTransaction().remove(it).commitNow() 
                                                         }
                                                     }
 
                                                     if (existing == null || forceRecreate) {
                                                         val savedLocator = viewModel.getLastLocator(book?.id ?: -1)
                                                         val initialLocator = savedLocator ?: pub.locatorFromLink(pub.readingOrder.first())
+                                                        
+                                                        // Ensure isRestoring is true before setting up the navigator to prevent immediate saves
+                                                        isRestoring = true
+                                                        
                                                         viewModel.currentProgression = initialLocator?.locations?.totalProgression
 
                                                         val initialPreferences = PdfiumPreferences(
@@ -355,7 +403,7 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                                                             fit = Fit.CONTAIN,
                                                             readingProgression = ReadingProgression.LTR
                                                         )
-                                                        
+
                                                         @Suppress("UNCHECKED_CAST")
                                                         val factory = viewModel.pdfNavigatorFactory as PdfNavigatorFactory<*, PdfiumPreferences, *>
                                                         
@@ -364,14 +412,32 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                                                             initialPreferences = initialPreferences,
                                                             listener = object : PdfNavigatorFragment.Listener {}
                                                         )
-
                                                         val navigator = navigatorFactory.instantiate(activity.classLoader, PdfNavigatorFragment::class.java.name) as PdfNavigatorFragment<*, *>
+                                                        
+                                                        scope.launch {
+                                                            navigator.currentLocator.collect { locator ->
+                                                                if (isRestoring) return@collect
+                                                                
+                                                                viewModel.currentPageIndex = locator.locations.position?.let { it - 1 } ?: 0
+                                                                val totalProgression = locator.locations.totalProgression
+                                                                if (totalProgression != null) {
+                                                                    viewModel.currentProgression = totalProgression
+                                                                    viewModel.saveReadingProgress(locator)
+                                                                } else {
+                                                                    val fallback = viewModel.calculateFallbackProgress(viewModel.currentPublication, locator)
+                                                                    viewModel.currentProgression = fallback
+                                                                    viewModel.saveReadingProgress(locator, fallback)
+                                                                }
+                                                            }
+                                                        }
+
                                                         navigator.addInputListener(object : InputListener {
                                                             override fun onTap(event: TapEvent): Boolean {
                                                                 showControls = !showControls
                                                                 return true
                                                             }
                                                         })
+                                                        
                                                         activity.supportFragmentManager.beginTransaction()
                                                             .replace(containerId, navigator)
                                                             .commitNow()
@@ -386,7 +452,6 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                                                                 fit = Fit.CONTAIN,
                                                                 readingProgression = ReadingProgression.LTR
                                                             )
-                                                            // Only submit if not recreated
                                                             pdfFrag.submitPreferences(newPrefs)
                                                         }
                                                     }
@@ -395,7 +460,7 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                                         )
                                     }
                                 } else {
-                                    // Fallback to legacy PDF renderer
+                                    // Fallback logic
                                     val pageScales = remember(book?.id) { mutableStateMapOf<Int, Float>() }
                                     val isCurrentPageZoomed = (pageScales[pagerState.currentPage] ?: 1f) > 1f
 
@@ -408,10 +473,7 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                                     ) { pageIndex ->
                                         var scale by remember { mutableFloatStateOf(1f) }
                                         var offset by remember { mutableStateOf(Offset.Zero) }
-
-                                        LaunchedEffect(scale) {
-                                            pageScales[pageIndex] = scale
-                                        }
+                                        LaunchedEffect(scale) { pageScales[pageIndex] = scale }
 
                                         val state = rememberTransformableState { zoomChange, offsetChange, _ ->
                                             scale = (scale * zoomChange).coerceIn(1f, 5f)
@@ -461,10 +523,7 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                                                 update = { imageView ->
                                                     scope.launch(Dispatchers.IO) {
                                                         try {
-                                                            val pfd = android.os.ParcelFileDescriptor.open(
-                                                                file,
-                                                                android.os.ParcelFileDescriptor.MODE_READ_ONLY
-                                                            )
+                                                            val pfd = android.os.ParcelFileDescriptor.open(file, android.os.ParcelFileDescriptor.MODE_READ_ONLY)
                                                             val renderer = android.graphics.pdf.PdfRenderer(pfd)
                                                             if (pageIndex < renderer.pageCount) {
                                                                 val page = renderer.openPage(pageIndex)
@@ -475,9 +534,7 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                                                                 val canvas = android.graphics.Canvas(bitmap)
                                                                 canvas.drawColor(android.graphics.Color.WHITE)
                                                                 page.render(bitmap, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                                                                withContext(Dispatchers.Main) {
-                                                                    imageView.setImageBitmap(bitmap)
-                                                                }
+                                                                withContext(Dispatchers.Main) { imageView.setImageBitmap(bitmap) }
                                                                 page.close()
                                                             }
                                                             renderer.close()
@@ -520,20 +577,26 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
 
                                     Box(modifier = Modifier.fillMaxSize()) {
                                         AndroidView(
-                                            factory = { ctx ->
-                                                FragmentContainerView(ctx).apply { id = containerId }
-                                            },
+                                            factory = { ctx -> FragmentContainerView(ctx).apply { id = containerId } },
                                             modifier = Modifier.fillMaxSize(),
                                             update = { _ ->
                                                 val activity = context as? FragmentActivity
                                                 if (activity != null) {
                                                     val existing = activity.supportFragmentManager.findFragmentById(containerId) as? EpubNavigatorFragment
-                                                    
                                                     if (existing == null) {
                                                         val savedLocator = viewModel.getLastLocator(book?.id ?: -1)
                                                         val initialLocator = savedLocator ?: pub.locatorFromLink(pub.readingOrder.first())
-                                                        viewModel.currentProgression = initialLocator?.locations?.totalProgression
                                                         
+                                                        // Ensure isRestoring is true before setting up the navigator to prevent immediate saves
+                                                        isRestoring = true
+                                                        
+                                                        val initialProgression = initialLocator?.locations?.totalProgression
+                                                        if (initialProgression != null) {
+                                                            viewModel.currentProgression = initialProgression
+                                                        } else if (initialLocator != null) {
+                                                            viewModel.currentProgression = viewModel.calculateFallbackProgress(pub, initialLocator)
+                                                        }
+
                                                         val initialPreferences = EpubPreferences(
                                                             scroll = false,
                                                             columnCount = ColumnCount.AUTO,
@@ -550,9 +613,18 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
 
                                                         val paginationListener = object : EpubNavigatorFragment.PaginationListener {
                                                             override fun onPageChanged(pageIndex: Int, totalPages: Int, locator: Locator) {
+                                                                if (isRestoring) return
+
                                                                 viewModel.currentPageIndex = pageIndex
-                                                                viewModel.currentProgression = locator.locations.totalProgression
-                                                                viewModel.saveReadingProgress(locator)
+                                                                val totalProgression = locator.locations.totalProgression
+                                                                if (totalProgression != null) {
+                                                                    viewModel.currentProgression = totalProgression
+                                                                    viewModel.saveReadingProgress(locator)
+                                                                } else {
+                                                                    val fallback = viewModel.calculateFallbackProgress(viewModel.currentPublication, locator)
+                                                                    viewModel.currentProgression = fallback
+                                                                    viewModel.saveReadingProgress(locator, fallback)
+                                                                }
                                                             }
                                                         }
 
@@ -566,7 +638,6 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                                                             listener = listener,
                                                             paginationListener = paginationListener
                                                         )
-                                                        
                                                         val navigator = navigatorFactory.instantiate(activity.classLoader, EpubNavigatorFragment::class.java.name) as EpubNavigatorFragment
                                                         navigator.addInputListener(object : InputListener {
                                                             override fun onTap(event: TapEvent): Boolean {
@@ -599,31 +670,14 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                                             }
                                         )
                                     }
-                                } else {
-                                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                        Text("Failed to load EPUB", color = Color(bookText))
-                                    }
-                                }
-                            }
-                            "azw3", "mobi" -> {
-                                if (isReaderLoading) {
-                                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                        CircularProgressIndicator(color = Color(bookText))
-                                    }
-                                } else if (error != null) {
-                                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                        Text(error, color = Color(bookText))
-                                    }
-                                } else {
+                                } else if (viewModel.readerPages.isNotEmpty()) {
                                     Box(modifier = Modifier
                                         .fillMaxSize()
                                         .padding(padding)
                                         .clickable(
                                             interactionSource = remember { MutableInteractionSource() },
                                             indication = null
-                                        ) {
-                                            showControls = !showControls
-                                        }
+                                        ) { showControls = !showControls }
                                     ) {
                                         HorizontalPager(
                                             state = pagerState,
@@ -634,7 +688,6 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                                         ) { globalIndex ->
                                             val (chapterIndex, pageInChapter) = viewModel.getChapterAndPage(globalIndex)
                                             val page = pages.getOrNull(chapterIndex)
-                                            
                                             if (page != null) {
                                                 Box(modifier = Modifier.fillMaxSize()) {
                                                     AndroidView(
@@ -647,7 +700,6 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                                                                 setBackgroundColor(bookBg)
                                                                 isVerticalScrollBarEnabled = false
                                                                 isHorizontalScrollBarEnabled = false
-                                                                
                                                                 addJavascriptInterface(object {
                                                                     @Suppress("unused")
                                                                     @android.webkit.JavascriptInterface
@@ -678,7 +730,7 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                                                                         super.onPageFinished(view, url)
                                                                         view?.evaluateJavascript("scrollToPage($pageInChapter)", null)
                                                                     }
-                                                                    
+
                                                                     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                                                                         val url = request?.url?.toString() ?: return false
                                                                         val href = if (url.startsWith("file:///android_asset/")) {
@@ -688,7 +740,6 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                                                                         } else {
                                                                             null
                                                                         }
-
                                                                         if (href != null) {
                                                                             val decodedHref = android.net.Uri.decode(href)
                                                                             val cleanHref = decodedHref.substringBefore("#").trimStart('/')
@@ -707,18 +758,15 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                                                                     override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
                                                                         val url = request?.url?.toString() ?: return null
                                                                         if (url.startsWith("http") || url.startsWith("https")) return null
-
                                                                         val epub = viewModel.currentEpubBook
                                                                         val mobi = viewModel.currentMobiData
-
                                                                         var path = url.substringAfter("file://").trimStart('/')
                                                                         if (path.startsWith("android_asset/")) {
                                                                             path = path.substring("android_asset/".length)
                                                                         }
-                                                                        
                                                                         path = android.net.Uri.decode(path).substringBefore("?").substringBefore("#")
                                                                         val fileName = path.substringAfterLast("/")
-                                                                        
+
                                                                         if (path.contains("recindex=")) {
                                                                             val indexStr = path.substringAfter("recindex=").takeWhile { it.isDigit() }
                                                                             val index = indexStr.toIntOrNull()
@@ -749,6 +797,180 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                                                                         return super.shouldInterceptRequest(view, request)
                                                                     }
                                                                 }
+
+                                                                @SuppressLint("SetJavaScriptEnabled")
+                                                                settings.apply {
+                                                                    javaScriptEnabled = true
+                                                                    domStorageEnabled = true
+                                                                    defaultTextEncodingName = "utf-8"
+                                                                    layoutAlgorithm = WebSettings.LayoutAlgorithm.NORMAL
+                                                                    textZoom = 100
+                                                                    mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                                                                    allowFileAccess = true
+                                                                    allowContentAccess = true
+                                                                }
+                                                            }
+                                                        },
+                                                        update = { view ->
+                                                            val basePath = page.basePath ?: ""
+                                                            val baseUrl = "file:///android_asset/${if (basePath.isEmpty()) "" else "$basePath/"}"
+                                                            val currentTag = "${baseUrl}|${page.content.hashCode()}"
+                                                            if (view.tag != currentTag) {
+                                                                view.loadDataWithBaseURL(baseUrl, page.content, "text/html", "UTF-8", null)
+                                                                view.tag = currentTag
+                                                            } else {
+                                                                view.evaluateJavascript("scrollToPage($pageInChapter)", null)
+                                                            }
+                                                        },
+                                                        modifier = Modifier.fillMaxSize()
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                        Text("Failed to load EPUB", color = Color(bookText))
+                                    }
+                                }
+                            }
+                            "azw3", "mobi" -> {
+                                if (isReaderLoading) {
+                                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                        CircularProgressIndicator(color = Color(bookText))
+                                    }
+                                } else if (error != null) {
+                                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                        Text(error, color = Color(bookText))
+                                    }
+                                } else {
+                                    Box(modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(padding)
+                                        .clickable(
+                                            interactionSource = remember { MutableInteractionSource() },
+                                            indication = null
+                                        ) { showControls = !showControls }
+                                    ) {
+                                        HorizontalPager(
+                                            state = pagerState,
+                                            modifier = Modifier.fillMaxSize(),
+                                            beyondViewportPageCount = 1,
+                                            pageSpacing = 0.dp,
+                                            userScrollEnabled = true
+                                        ) { globalIndex ->
+                                            val (chapterIndex, pageInChapter) = viewModel.getChapterAndPage(globalIndex)
+                                            val page = pages.getOrNull(chapterIndex)
+                                            if (page != null) {
+                                                Box(modifier = Modifier.fillMaxSize()) {
+                                                    AndroidView(
+                                                        factory = { ctx ->
+                                                            WebView(ctx).apply {
+                                                                layoutParams = ViewGroup.LayoutParams(
+                                                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                                                    ViewGroup.LayoutParams.MATCH_PARENT
+                                                                )
+                                                                setBackgroundColor(bookBg)
+                                                                isVerticalScrollBarEnabled = false
+                                                                isHorizontalScrollBarEnabled = false
+                                                                addJavascriptInterface(object {
+                                                                    @Suppress("unused")
+                                                                    @android.webkit.JavascriptInterface
+                                                                    fun onPageCountReady(count: Int) {
+                                                                        scope.launch(Dispatchers.Main) {
+                                                                            val adjustedCount = maxOf(1, count)
+                                                                            if (viewModel.chapterPageCounts[chapterIndex] != adjustedCount) {
+                                                                                viewModel.updateChapterPageCount(chapterIndex, adjustedCount)
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }, "Android")
+
+                                                                @SuppressLint("ClickableViewAccessibility")
+                                                                setOnTouchListener { v, event ->
+                                                                    if (event.action == android.view.MotionEvent.ACTION_UP) {
+                                                                        val duration = event.eventTime - event.downTime
+                                                                        if (duration < 200) {
+                                                                            v.performClick()
+                                                                            showControls = !showControls
+                                                                        }
+                                                                    }
+                                                                    false
+                                                                }
+
+                                                                webViewClient = object : WebViewClient() {
+                                                                    override fun onPageFinished(view: WebView?, url: String?) {
+                                                                        super.onPageFinished(view, url)
+                                                                        view?.evaluateJavascript("scrollToPage($pageInChapter)", null)
+                                                                    }
+
+                                                                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                                                                        val url = request?.url?.toString() ?: return false
+                                                                        val href = if (url.startsWith("file:///android_asset/")) {
+                                                                            url.substringAfter("file:///android_asset/")
+                                                                        } else if (url.startsWith("file://android_asset/")) {
+                                                                            url.substringAfter("file://android_asset/")
+                                                                        } else {
+                                                                            null
+                                                                        }
+                                                                        if (href != null) {
+                                                                            val decodedHref = android.net.Uri.decode(href)
+                                                                            val cleanHref = decodedHref.substringBefore("#").trimStart('/')
+                                                                            val targetChapter = viewModel.findPageIndexForHref(cleanHref)
+                                                                            if (targetChapter != -1) {
+                                                                                scope.launch {
+                                                                                    val targetGlobal = viewModel.getGlobalIndex(targetChapter, 0)
+                                                                                    pagerState.scrollToPage(targetGlobal)
+                                                                                }
+                                                                                return true
+                                                                            }
+                                                                        }
+                                                                        return true
+                                                                    }
+
+                                                                    override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+                                                                        val url = request?.url?.toString() ?: return null
+                                                                        if (url.startsWith("http") || url.startsWith("https")) return null
+                                                                        val epub = viewModel.currentEpubBook
+                                                                        val mobi = viewModel.currentMobiData
+                                                                        var path = url.substringAfter("file://").trimStart('/')
+                                                                        if (path.startsWith("android_asset/")) {
+                                                                            path = path.substring("android_asset/".length)
+                                                                        }
+                                                                        path = android.net.Uri.decode(path).substringBefore("?").substringBefore("#")
+                                                                        val fileName = path.substringAfterLast("/")
+
+                                                                        if (path.contains("recindex=")) {
+                                                                            val indexStr = path.substringAfter("recindex=").takeWhile { it.isDigit() }
+                                                                            val index = indexStr.toIntOrNull()
+                                                                            if (index != null && mobi != null) {
+                                                                                val imgData = mobi.images[index]
+                                                                                if (imgData != null) {
+                                                                                    return WebResourceResponse("image/jpeg", null, ByteArrayInputStream(imgData))
+                                                                                }
+                                                                            }
+                                                                        }
+
+                                                                        if (epub != null) {
+                                                                            var res = epub.resources?.getByHref(path)
+                                                                            if (res == null && path.contains("/")) {
+                                                                                res = epub.resources?.getByHref(path.substringAfter("/"))
+                                                                            }
+                                                                            if (res == null && fileName.isNotEmpty()) {
+                                                                                res = epub.resources?.all?.find { 
+                                                                                    val href = it.href.trimStart('/')
+                                                                                    href == fileName || href.endsWith("/$fileName")
+                                                                                }
+                                                                            }
+                                                                            if (res != null) {
+                                                                                val mimeType = res.mediaType?.name ?: "image/jpeg"
+                                                                                return WebResourceResponse(mimeType, null, ByteArrayInputStream(res.data))
+                                                                            }
+                                                                        }
+                                                                        return super.shouldInterceptRequest(view, request)
+                                                                    }
+                                                                }
+
                                                                 @SuppressLint("SetJavaScriptEnabled")
                                                                 settings.apply {
                                                                     javaScriptEnabled = true
@@ -804,7 +1026,9 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                             navigationIconContentColor = Color(uiText),
                             actionIconContentColor = Color(uiText)
                         ),
-                        title = { Text(book?.title ?: stringResource(R.string.app_name), style = MaterialTheme.typography.titleMedium, maxLines = 1) },
+                        title = {
+                            Text(book?.title ?: stringResource(R.string.app_name), style = MaterialTheme.typography.titleMedium, maxLines = 1)
+                        },
                         navigationIcon = {
                             IconButton(onClick = onBack) {
                                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
@@ -856,9 +1080,17 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                         shadowElevation = 4.dp
                     ) {
                         val currentBookFormat = book?.format?.lowercase() ?: ""
+                        
+                        val displayProgress = when {
+                            currentNavigator != null -> viewModel.currentProgression ?: 0.0
+                            viewModel.totalPagesCount > 1 -> (pagerState.currentPage.toDouble() / (viewModel.totalPagesCount - 1).toDouble())
+                            else -> 0.0
+                        }
+
                         Text(
-                            text = if (currentBookFormat == "epub" || currentBookFormat == "pdf") "Progress: ${((viewModel.currentProgression ?: 0.0) * 100).toInt()}%"
-                                   else "Page ${pagerState.currentPage + 1} of ${viewModel.totalPagesCount}",
+                            text = if (currentBookFormat == "epub" || currentBookFormat == "pdf") 
+                                "Progress: ${(displayProgress * 100).toInt().coerceIn(0, 100)}%" 
+                                else "Page ${pagerState.currentPage + 1} of ${viewModel.totalPagesCount}",
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                             style = MaterialTheme.typography.labelLarge,
                             color = Color(uiText)
@@ -867,109 +1099,105 @@ fun ReaderScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                 }
             }
         }
-    }
 
-    if (showSettings) {
-        AlertDialog(
-            onDismissRequest = { showSettings = false },
-            title = { Text("Reader Settings") },
-            text = {
-                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                    Text("Font Size: ${viewModel.readerFontSize}", style = MaterialTheme.typography.bodyMedium)
-                    Row(
-                        modifier = Modifier.padding(top = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Button(
-                            onClick = { viewModel.updateReaderFontSize(-1) },
-                            modifier = Modifier.weight(1f)
-                        ) { Text("-") }
-                        Spacer(Modifier.width(16.dp))
-                        Button(
-                            onClick = { viewModel.updateReaderFontSize(1) },
-                            modifier = Modifier.weight(1f)
-                        ) { Text("+") }
-                    }
-                    
-                    val fmt = book?.format?.lowercase() ?: ""
-                    if (fmt == "pdf") {
-                        Spacer(Modifier.height(16.dp))
-                        Text("Scroll Mode", style = MaterialTheme.typography.bodyMedium)
+        if (showSettings) {
+            AlertDialog(
+                onDismissRequest = { showSettings = false },
+                title = { Text("Reader Settings") },
+                text = {
+                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                        Text("Font Size: ${viewModel.readerFontSize}", style = MaterialTheme.typography.bodyMedium)
                         Row(
-                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            modifier = Modifier.padding(top = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            FilterChip(
-                                modifier = Modifier.weight(1f),
-                                selected = viewModel.readerScrollMode == "Horizontal",
-                                onClick = { viewModel.updateReaderScrollMode("Horizontal") },
-                                label = { Text("Horizontal", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center) }
-                            )
-                            FilterChip(
-                                modifier = Modifier.weight(1f),
-                                selected = viewModel.readerScrollMode == "Vertical",
-                                onClick = { viewModel.updateReaderScrollMode("Vertical") },
-                                label = { Text("Vertical", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center) }
-                            )
+                            Button(
+                                onClick = { viewModel.updateReaderFontSize(-1) },
+                                modifier = Modifier.weight(1f)
+                            ) { Text("-") }
+                            Spacer(Modifier.width(16.dp))
+                            Button(
+                                onClick = { viewModel.updateReaderFontSize(1) },
+                                modifier = Modifier.weight(1f)
+                            ) { Text("+") }
                         }
-                    }
 
-                    if (fmt != "pdf") {
-                        Spacer(Modifier.height(16.dp))
-                        Text("Theme", style = MaterialTheme.typography.bodyMedium)
-                        Column(modifier = Modifier.padding(top = 8.dp)) {
-                            val themeOptions = listOf(
-                                "System" to stringResource(R.string.theme_system),
-                                "Light" to stringResource(R.string.theme_light),
-                                "Sepia" to stringResource(R.string.theme_sepia),
-                                "Dark" to stringResource(R.string.theme_dark)
-                            )
-                            themeOptions.chunked(2).forEach { rowOptions ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    rowOptions.forEach { (value, label) ->
-                                        FilterChip(
-                                            modifier = Modifier.weight(1f),
-                                            selected = viewModel.readerTheme == value,
-                                            onClick = { viewModel.updateReaderTheme(value) },
-                                            label = { Text(label, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center) }
-                                        )
+                        val fmt = book?.format?.lowercase() ?: ""
+                        if (fmt == "pdf") {
+                            Spacer(Modifier.height(16.dp))
+                            Text("Scroll Mode", style = MaterialTheme.typography.bodyMedium)
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                FilterChip(
+                                    modifier = Modifier.weight(1f),
+                                    selected = viewModel.readerScrollMode == "Horizontal",
+                                    onClick = { viewModel.updateReaderScrollMode("Horizontal") },
+                                    label = { Text("Horizontal", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center) }
+                                )
+                                FilterChip(
+                                    modifier = Modifier.weight(1f),
+                                    selected = viewModel.readerScrollMode == "Vertical",
+                                    onClick = { viewModel.updateReaderScrollMode("Vertical") },
+                                    label = { Text("Vertical", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center) }
+                                )
+                            }
+                        }
+
+                        if (fmt != "pdf") {
+                            Spacer(Modifier.height(16.dp))
+                            Text("Theme", style = MaterialTheme.typography.bodyMedium)
+                            Column(modifier = Modifier.padding(top = 8.dp)) {
+                                val themeOptions = listOf(
+                                    "System" to stringResource(R.string.theme_system),
+                                    "Light" to stringResource(R.string.theme_light),
+                                    "Sepia" to stringResource(R.string.theme_sepia),
+                                    "Dark" to stringResource(R.string.theme_dark)
+                                )
+                                themeOptions.chunked(2).forEach { rowOptions ->
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        rowOptions.forEach { (value, label) ->
+                                            FilterChip(
+                                                modifier = Modifier.weight(1f),
+                                                selected = viewModel.readerTheme == value,
+                                                onClick = { viewModel.updateReaderTheme(value) },
+                                                label = { Text(label, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center) }
+                                            )
+                                        }
                                     }
                                 }
                             }
                         }
                     }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showSettings = false }) { Text("Close") }
                 }
-            },
-            confirmButton = {
-                TextButton(onClick = { showSettings = false }) { Text("Close") }
-            }
-        )
-    }
+            )
+        }
 
-    if (bookmarkToDelete != null) {
-        AlertDialog(
-            onDismissRequest = { bookmarkToDeleteState.value = null },
-            title = { Text("Delete Bookmark") },
-            text = { Text("Are you sure you want to delete this bookmark?") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        viewModel.removeBookmark(bookmarkToDelete)
-                        bookmarkToDeleteState.value = null
-                    },
-                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                ) {
-                    Text("Delete")
+        if (bookmarkToDelete != null) {
+            AlertDialog(
+                onDismissRequest = { bookmarkToDeleteState.value = null },
+                title = { Text("Delete Bookmark") },
+                text = { Text("Are you sure you want to delete this bookmark?") },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            viewModel.removeBookmark(bookmarkToDelete)
+                            bookmarkToDeleteState.value = null
+                        },
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                    ) { Text("Delete") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { bookmarkToDeleteState.value = null }) { Text("Cancel") }
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = { bookmarkToDeleteState.value = null }) {
-                    Text("Cancel")
-                }
-            }
-        )
+            )
+        }
     }
 }

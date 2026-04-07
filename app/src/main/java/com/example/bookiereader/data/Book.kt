@@ -20,7 +20,8 @@ data class Book(
     @SerializedName("series_order")
     val seriesOrder: Double? = null,
     @SerializedName("tags")
-    val tags: List<String>? = null
+    val tags: List<String>? = null,
+    val progress: Float? = null
 )
 
 data class BookResponse(
