@@ -13,8 +13,8 @@ android {
         applicationId = "com.example.bookiereader"
         minSdk = 24
         targetSdk = 36
-        versionCode = 5
-        versionName = "1.1.4"
+        versionCode = 6
+        versionName = "1.1.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -74,6 +74,7 @@ dependencies {
         exclude(group = "xmlpull", module = "xmlpull")
     }
     implementation(libs.readium.shared)
+    implementation(libs.readium.shared.util)
     implementation(libs.readium.streamer)
     implementation(libs.readium.nav)
     implementation(libs.readium.adapter.pdfium)
