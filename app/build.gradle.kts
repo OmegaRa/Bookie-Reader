@@ -74,13 +74,13 @@ dependencies {
         exclude(group = "xmlpull", module = "xmlpull")
     }
     implementation(libs.readium.shared)
-    implementation(libs.readium.shared.util)
     implementation(libs.readium.streamer)
     implementation(libs.readium.nav)
     implementation(libs.readium.adapter.pdfium)
     implementation(libs.readium.adapter.pdfium.document)
     implementation(libs.readium.adapter.pdfium.navigator)
     implementation(libs.barteksc.pdf.viewer)
+    implementation(libs.pdfium.android)
     implementation(libs.pdf.viewer.androidx)
     implementation(libs.pdfbox.android)
 

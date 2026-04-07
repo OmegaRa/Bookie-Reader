@@ -22,7 +22,8 @@ compose-icons = "1.7.8"
 room = "2.8.4"
 security-crypto = "1.1.0"
 desugarJdkLibs = "2.1.5"
-barteksc-pdf-viewer = "3.2.8"
+barteksc-pdf-viewer = "3.2.0-beta.1"
+pdfium-android = "1.9.8"
 
 [libraries]
 desugarJdkLibs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugarJdkLibs" }
@@ -58,11 +59,11 @@ androidx-core-splashscreen = { group = "androidx.core", name = "core-splashscree
 readium-shared = { group = "org.readium.kotlin-toolkit", name = "readium-shared", version.ref = "readium" }
 readium-streamer = { group = "org.readium.kotlin-toolkit", name = "readium-streamer", version.ref = "readium" }
 readium-nav = { group = "org.readium.kotlin-toolkit", name = "readium-navigator", version.ref = "readium" }
-readium-shared-util = { group = "org.readium.kotlin-toolkit", name = "readium-shared-util", version.ref = "readium" }
 readium-adapter-pdfium = { group = "org.readium.kotlin-toolkit", name = "readium-adapter-pdfium", version.ref = "readium" }
 readium-adapter-pdfium-document = { group = "org.readium.kotlin-toolkit", name = "readium-adapter-pdfium-document", version.ref = "readium" }
 readium-adapter-pdfium-navigator = { group = "org.readium.kotlin-toolkit", name = "readium-adapter-pdfium-navigator", version.ref = "readium" }
-barteksc-pdf-viewer = { group = "com.github.marain87", name = "AndroidPdfViewer", version.ref = "barteksc-pdf-viewer" }
+barteksc-pdf-viewer = { group = "com.github.barteksc", name = "android-pdf-viewer", version.ref = "barteksc-pdf-viewer" }
+pdfium-android = { group = "com.github.barteksc", name = "pdfium-android", version.ref = "pdfium-android" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
