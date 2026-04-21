@@ -1,6 +1,6 @@
 # Bookie Reader 📚
 
-Bookie Reader is a modern, lightweight, and feature-rich Android e-book reader built with Jetpack Compose. It supports a variety of formats including EPUB and PDF, and offers a seamless reading experience with both local and server-based library management.
+Bookie Reader is a modern, lightweight, and feature-rich Android e-book reader built with Jetpack Compose in Gemini on Android Studio. It supports a variety of formats including EPUB and PDF, and offers a seamless reading experience with both local and server-based library management.
 
 ## ✨ Features
 
