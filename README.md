@@ -1,4 +1,4 @@
-# <img width="280" height="280" alt="Bookie" src="https://github.com/user-attachments/assets/5fd804e2-e09b-464d-a579-458e378a130a" /> Bookie Reader
+# <img width="100" height="100" alt="Bookie" src="https://github.com/user-attachments/assets/5fd804e2-e09b-464d-a579-458e378a130a" /> Bookie Reader
 
 
 Bookie Reader is a modern, lightweight, and feature-rich Android e-book reader built with Jetpack Compose in Gemini on Android Studio. It supports a variety of formats including EPUB and PDF, and offers a seamless reading experience with both local and server-based library management.
