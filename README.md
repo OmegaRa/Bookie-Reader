@@ -49,7 +49,7 @@ Bookie Reader is a modern, lightweight, and feature-rich Android e-book reader b
 
 ## 🚀 Getting Started
 
-1. **Prerequisites**: Ensure you have a running instance of [Bookie](https://github.com/sweatyeggs69/Bookie) or [Bookie+](https://github.com/OmegaRa/Bookie+)
+1. **Prerequisites**: Ensure you have a running instance of [Bookie](https://github.com/sweatyeggs69/Bookie) or [Bookie+](https://github.com/OmegaRa/BookiePlus)
 2. **Connection**: Upon launching the app, enter your Bookie server URL and your credentials (username and password).
 3. **Browsing**: Once connected, you'll see your library. You can pull to refresh the book list.
 4. **Reading**: Tap a book to download and open it in the reader.
