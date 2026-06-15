@@ -48,10 +48,10 @@
     <string name="not_connected">Not connected</string>
     <string name="local_storage_header">Local Storage</string>
     <string name="import_books_label">Import Books</string>
-    <string name="import_books_desc">Add EPUB or PDF files from your device</string>
+    <string name="import_books_desc">Add EPUB, PDF, MOBI, or AZW3 files from your device</string>
     <string name="about_header">About</string>
     <string name="version_label">Version</string>
-    <string name="version_value">1.1.5</string>
+    <string name="version_value">1.2.1</string>
     <string name="select_theme_title">Select Theme</string>
     <string name="theme_light">Light</string>
     <string name="theme_dark">Dark</string>
@@ -110,4 +110,16 @@
     <string name="delete_confirm">Delete</string>
     <string name="error_failed_to_extract">Failed to extract book.</string>
     <string name="error_unsupported_file">Unsupported file type.</string>
+
+    <!-- Audiobook Player -->
+    <string name="now_playing">Now Playing</string>
+    <string name="narrated_by">Narrated by %1$s</string>
+    <string name="select_chapter">Select Chapter</string>
+    <string name="skip_backward">Skip backward 15 seconds</string>
+    <string name="skip_forward">Skip forward 15 seconds</string>
+    <string name="pause">Pause</string>
+    <string name="play">Play</string>
+    <string name="stop">Stop</string>
+    <string name="chapters_title">Chapters</string>
+    <string name="playback_speed_title">Playback Speed</string>
 </resources>

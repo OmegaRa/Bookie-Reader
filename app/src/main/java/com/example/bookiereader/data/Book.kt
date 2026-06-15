@@ -21,7 +21,21 @@ data class Book(
     val seriesOrder: Double? = null,
     @SerializedName("tags")
     val tags: List<String>? = null,
-    val progress: Float? = null
+    val progress: Float? = null,
+
+    // Audiobook metadata matching Python backend
+    @SerializedName("is_audiobook")
+    val isAudiobook: Boolean = false,
+    @SerializedName("duration")
+    val duration: Int? = null,
+    @SerializedName("narrator")
+    val narrator: String? = null,
+    @SerializedName("audio_format")
+    val audioFormat: String? = null,
+    @SerializedName("chapters")
+    val chapters: String? = null,
+    @SerializedName("progress_location")
+    val progressLocation: String? = null
 )
 
 data class BookResponse(
@@ -34,4 +48,13 @@ data class BookResponse(
 data class LoginRequest(
     val username: String,
     val password: String
+)
+
+data class ProgressRequest(
+    @SerializedName("progress")
+    val progress: Float,
+    @SerializedName("progress_location")
+    val progressLocation: String? = null,
+    @SerializedName("read_status")
+    val readStatus: String? = null
 )

@@ -72,12 +72,277 @@ data class TocItem(
     val locatorJson: String? = null
 )
 
+data class AudioChapter(
+    val title: String,
+    val start: Double, // in seconds
+    val end: Double? = null // in seconds
+)
+
 @OptIn(ExperimentalReadiumApi::class)
 class BookViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application
     private val prefs = application.getSharedPreferences("bookie_prefs", Context.MODE_PRIVATE)
     private val db = AppDatabase.getDatabase(application)
     private val localBookDao = db.localBookDao()
+
+    // Audiobook playback states
+    var currentPlayingAudiobook by mutableStateOf<Book?>(null)
+        private set
+    var isAudioPlaying by mutableStateOf(false)
+        private set
+    var audioDuration by mutableIntStateOf(0)
+        private set
+    var audioPosition by mutableIntStateOf(0)
+        private set
+    var audioPlaybackSpeed by mutableFloatStateOf(1.0f)
+        private set
+    var audioChapters by mutableStateOf<List<AudioChapter>>(emptyList())
+        private set
+    var currentAudioChapterIndex by mutableIntStateOf(-1)
+        private set
+
+    private var mediaPlayer: android.media.MediaPlayer? = null
+    private var progressTrackerJob: Job? = null
+
+    fun parseChapters(jsonStr: String?): List<AudioChapter> {
+        if (jsonStr.isNullOrBlank()) return emptyList()
+        return try {
+            val list = mutableListOf<AudioChapter>()
+            val array = org.json.JSONArray(jsonStr)
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                val title = obj.optString("title", "Chapter ${i + 1}")
+                val start = obj.optDouble("start", obj.optDouble("start_time", 0.0))
+                val end = if (obj.has("end")) obj.optDouble("end") else if (obj.has("end_time")) obj.optDouble("end_time") else null
+                list.add(AudioChapter(title, start, end))
+            }
+            list
+        } catch (e: Exception) {
+            Log.e("BookViewModel", "Failed to parse chapters JSON", e)
+            emptyList()
+        }
+    }
+
+    fun playAudiobook(context: Context, book: Book) {
+        stopAudiobookPlayback()
+
+        currentPlayingAudiobook = book
+        audioChapters = parseChapters(book.chapters)
+        currentAudioChapterIndex = -1
+
+        val headers = mutableMapOf<String, String>()
+        getSavedSessionCookie()?.let { headers["Cookie"] = it }
+
+        val downloadUrl = if (book.id < 0) book.downloadUrl else "${baseUrl}books/${book.id}/download"
+
+        val mp = android.media.MediaPlayer()
+        mediaPlayer = mp
+
+        try {
+            if (book.id < 0) {
+                mp.setDataSource(context, Uri.fromFile(File(downloadUrl)))
+            } else {
+                mp.setDataSource(context, Uri.parse(downloadUrl), headers)
+            }
+            
+            mp.setOnPreparedListener { preparedMp ->
+                audioDuration = preparedMp.duration
+                
+                preparedMp.playbackParams = preparedMp.playbackParams.setSpeed(audioPlaybackSpeed)
+
+                val savedProgressLoc = book.progressLocation
+                val savedPositionSeconds = parseProgressLocationToSeconds(savedProgressLoc)
+                if (savedPositionSeconds > 0) {
+                    preparedMp.seekTo((savedPositionSeconds * 1000).toInt())
+                } else if (book.progress != null && book.progress > 0f) {
+                    val seekPos = (book.progress * preparedMp.duration).toInt()
+                    preparedMp.seekTo(seekPos)
+                }
+
+                preparedMp.start()
+                isAudioPlaying = true
+                startProgressTracker()
+            }
+
+            mp.setOnCompletionListener {
+                isAudioPlaying = false
+                stopProgressTracker()
+                saveAudiobookProgress(1.0f, audioDuration.toFloat() / 1000f, "completed")
+            }
+
+            mp.setOnErrorListener { _, what, extra ->
+                Log.e("BookViewModel", "MediaPlayer error: what=$what extra=$extra")
+                errorMessage = "Failed to play audio"
+                isAudioPlaying = false
+                stopProgressTracker()
+                false
+            }
+
+            mp.prepareAsync()
+        } catch (e: Exception) {
+            Log.e("BookViewModel", "Error setting data source for media player", e)
+            errorMessage = "Failed to start audiobook"
+        }
+    }
+
+    fun pauseAudiobook() {
+        mediaPlayer?.let {
+            if (it.isPlaying) {
+                it.pause()
+                isAudioPlaying = false
+                val currentSec = it.currentPosition.toFloat() / 1000f
+                val totalSec = it.duration.toFloat() / 1000f
+                val progress = if (totalSec > 0) currentSec / totalSec else 0f
+                saveAudiobookProgress(progress, currentSec)
+            }
+        }
+    }
+
+    fun resumeAudiobook() {
+        mediaPlayer?.let {
+            if (!it.isPlaying) {
+                it.playbackParams = it.playbackParams.setSpeed(audioPlaybackSpeed)
+                it.start()
+                isAudioPlaying = true
+                startProgressTracker()
+            }
+        }
+    }
+
+    fun seekAudiobookTo(positionMs: Int) {
+        mediaPlayer?.let {
+            it.seekTo(positionMs)
+            audioPosition = positionMs
+            val currentSec = positionMs.toFloat() / 1000f
+            val totalSec = it.duration.toFloat() / 1000f
+            val progress = if (totalSec > 0) currentSec / totalSec else 0f
+            saveAudiobookProgress(progress, currentSec)
+        }
+    }
+
+    fun setAudiobookPlaybackSpeed(speed: Float) {
+        audioPlaybackSpeed = speed
+        mediaPlayer?.let {
+            if (it.isPlaying) {
+                try {
+                    it.playbackParams = it.playbackParams.setSpeed(speed)
+                } catch (e: Exception) {
+                    Log.e("BookViewModel", "Failed to set playback params", e)
+                }
+            }
+        }
+    }
+
+    fun skipAudiobookForward(seconds: Int = 15) {
+        mediaPlayer?.let {
+            val newPos = (it.currentPosition + seconds * 1000).coerceAtMost(it.duration)
+            seekAudiobookTo(newPos)
+        }
+    }
+
+    fun skipAudiobookBackward(seconds: Int = 15) {
+        mediaPlayer?.let {
+            val newPos = (it.currentPosition - seconds * 1000).coerceAtLeast(0)
+            seekAudiobookTo(newPos)
+        }
+    }
+
+    fun stopAudiobookPlayback() {
+        stopProgressTracker()
+        mediaPlayer?.let {
+            try {
+                if (it.isPlaying) {
+                    it.stop()
+                }
+            } catch (_: Exception) {}
+            it.release()
+        }
+        mediaPlayer = null
+        isAudioPlaying = false
+        currentPlayingAudiobook = null
+        audioChapters = emptyList()
+        currentAudioChapterIndex = -1
+    }
+
+    private fun startProgressTracker() {
+        progressTrackerJob?.cancel()
+        progressTrackerJob = viewModelScope.launch(Dispatchers.Main) {
+            while (isAudioPlaying) {
+                mediaPlayer?.let { mp ->
+                    audioPosition = mp.currentPosition
+                    val currentSec = mp.currentPosition.toDouble() / 1000.0
+                    
+                    var activeIndex = -1
+                    for (i in audioChapters.indices) {
+                        val ch = audioChapters[i]
+                        val start = ch.start
+                        val end = ch.end ?: Double.MAX_VALUE
+                        if (currentSec >= start && currentSec < end) {
+                            activeIndex = i
+                            break
+                        }
+                    }
+                    currentAudioChapterIndex = activeIndex
+                }
+                val book = currentPlayingAudiobook
+                if (book != null && mediaPlayer != null) {
+                    val currentSec = mediaPlayer!!.currentPosition.toFloat() / 1000f
+                    val totalSec = mediaPlayer!!.duration.toFloat() / 1000f
+                    val progress = if (totalSec > 0) currentSec / totalSec else 0f
+                    saveAudiobookProgress(progress, currentSec)
+                }
+                kotlinx.coroutines.delay(1000)
+            }
+        }
+    }
+
+    private fun stopProgressTracker() {
+        progressTrackerJob?.cancel()
+        progressTrackerJob = null
+    }
+
+    fun parseProgressLocationToSeconds(loc: String?): Double {
+        if (loc.isNullOrBlank()) return 0.0
+        return try {
+            loc.toDoubleOrNull() ?: 0.0
+        } catch (_: Exception) {
+            0.0
+        }
+    }
+
+    fun saveAudiobookProgress(progress: Float, seconds: Float, status: String = "reading") {
+        val book = currentPlayingAudiobook ?: return
+        val bookId = book.id
+        
+        viewModelScope.launch(Dispatchers.IO) {
+            if (bookId < 0) {
+                localBookDao.updateProgress(bookId, progress)
+            }
+            withContext(Dispatchers.Main) {
+                localBooks = localBooks.map { 
+                    if (it.id == bookId) it.copy(progress = progress, progressLocation = seconds.toString()) else it 
+                }
+                books = books.map { 
+                    if (it.id == bookId) it.copy(progress = progress, progressLocation = seconds.toString()) else it 
+                }
+            }
+            
+            if (bookId > 0) {
+                try {
+                    apiService?.saveProgress(
+                        id = bookId,
+                        request = com.example.bookiereader.data.ProgressRequest(
+                            progress = progress,
+                            progressLocation = seconds.toString(),
+                            readStatus = status
+                        )
+                    )
+                } catch (e: Exception) {
+                    Log.e("BookViewModel", "Failed to sync progress to server", e)
+                }
+            }
+        }
+    }
 
     // Software-level encryption to allow for Android Backup while keeping data non-plain-text
     private fun encrypt(value: String?): String? {
@@ -128,6 +393,9 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
         private set
 
     var okHttpClient: OkHttpClient? by mutableStateOf(null)
+        private set
+
+    var apiService: ApiService? by mutableStateOf(null)
         private set
 
     var sessionCacheBuster by mutableStateOf("")
@@ -296,6 +564,22 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                 putFloat("book_progress_$bookId", progress)
                 locator?.let {
                     putString("last_locator_$bookId", it.toJSON().toString())
+                }
+            }
+
+            if (bookId > 0) {
+                try {
+                    val locatorJson = locator?.toJSON()?.toString()
+                    apiService?.saveProgress(
+                        id = bookId,
+                        request = com.example.bookiereader.data.ProgressRequest(
+                            progress = progress,
+                            progressLocation = locatorJson,
+                            readStatus = if (progress >= 0.99f) "completed" else "reading"
+                        )
+                    )
+                } catch (e: Exception) {
+                    Log.e("BookViewModel", "Failed to sync progress to server", e)
                 }
             }
         }
@@ -571,6 +855,7 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
             .build()
 
         val service = retrofit.create(ApiService::class.java)
+        apiService = service
 
         viewModelScope.launch {
             isLoading = true
@@ -595,12 +880,18 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                 } while (allFetchedBooks.size < totalBooks && response.books.isNotEmpty())
                 
                 books = allFetchedBooks
-            } catch (_: Exception) {
-                prefs.edit { 
-                    remove("base_url")
-                    remove("session_cookie")
+            } catch (e: Exception) {
+                if (e is retrofit2.HttpException && e.code() == 401) {
+                    prefs.edit { 
+                        remove("base_url")
+                        remove("session_cookie")
+                    }
+                    errorMessage = app.getString(R.string.session_expired)
+                } else if (e is java.io.IOException) {
+                    errorMessage = app.getString(R.string.failed_to_connect, e.localizedMessage ?: "Network error")
+                } else {
+                    errorMessage = e.localizedMessage ?: app.getString(R.string.unknown_error)
                 }
-                errorMessage = app.getString(R.string.session_expired)
             } finally {
                 isLoading = false
             }
@@ -637,6 +928,7 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                 val loginResponse = service.login(LoginRequest(username, password))
                 
                 if (loginResponse.isSuccessful) {
+                    apiService = service
                     saveCredentials(formattedUrl, "") // Initial save, cookie is saved via CookieJar
                     okHttpClient = client
                     sessionCacheBuster = System.currentTimeMillis().toString()
@@ -1288,5 +1580,9 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
         return result
     }
 
-
+    override fun onCleared() {
+        super.onCleared()
+        stopAudiobookPlayback()
+        currentPublication?.close()
+    }
 }

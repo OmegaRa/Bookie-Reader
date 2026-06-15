@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Update
+import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -56,6 +57,7 @@ import com.example.bookiereader.data.Book
 fun BookListScreen(
     viewModel: BookViewModel,
     onOpenBook: () -> Unit,
+    onPlayAudiobook: () -> Unit,
     onLogout: () -> Unit,
     onSettings: () -> Unit
 ) {
@@ -161,7 +163,12 @@ fun BookListScreen(
                             }
                         }
                         IconButton(onClick = { 
-                            launcher.launch(arrayOf("application/epub+zip", "application/pdf"))
+                            launcher.launch(arrayOf(
+                                "application/epub+zip",
+                                "application/pdf",
+                                "application/x-mobipocket-ebook",
+                                "application/octet-stream"
+                            ))
                         }) {
                             Icon(Icons.Default.Add, contentDescription = stringResource(R.string.import_book))
                         }
@@ -355,6 +362,7 @@ fun BookListScreen(
                                     book = book,
                                     viewModel = viewModel,
                                     onOpenBook = onOpenBook,
+                                    onPlayAudiobook = onPlayAudiobook,
                                     isSelected = selectedBooks.value.contains(book.id),
                                     isSelectionMode = isSelectionMode,
                                     onToggleSelection = { onToggleSelection(book.id) }
@@ -372,6 +380,7 @@ fun BookListScreen(
                                     book = book,
                                     viewModel = viewModel,
                                     onOpenBook = onOpenBook,
+                                    onPlayAudiobook = onPlayAudiobook,
                                     isSelected = selectedBooks.value.contains(book.id),
                                     isSelectionMode = isSelectionMode,
                                     onToggleSelection = { onToggleSelection(book.id) }
@@ -391,6 +400,7 @@ fun BookGridItem(
     book: Book,
     viewModel: BookViewModel,
     onOpenBook: () -> Unit,
+    onPlayAudiobook: () -> Unit,
     isSelected: Boolean,
     isSelectionMode: Boolean,
     onToggleSelection: () -> Unit
@@ -417,7 +427,12 @@ fun BookGridItem(
                     if (isSelectionMode) {
                         onToggleSelection()
                     } else {
-                        viewModel.downloadAndOpenBook(context, book, onOpenBook)
+                        if (book.isAudiobook) {
+                            viewModel.playAudiobook(context, book)
+                            onPlayAudiobook()
+                        } else {
+                            viewModel.downloadAndOpenBook(context, book, onOpenBook)
+                        }
                     }
                 },
                 onLongClick = {
@@ -441,6 +456,23 @@ fun BookGridItem(
                     .clip(RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)),
                 contentScale = ContentScale.Crop
             )
+
+            if (book.isAudiobook) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(8.dp)
+                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
+                        .padding(4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Headphones,
+                        contentDescription = "Audiobook",
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
             
             if (isSelectionMode) {
                 if (isSelected) {
@@ -541,6 +573,7 @@ fun BookListItem(
     book: Book,
     viewModel: BookViewModel,
     onOpenBook: () -> Unit,
+    onPlayAudiobook: () -> Unit,
     isSelected: Boolean,
     isSelectionMode: Boolean,
     onToggleSelection: () -> Unit
@@ -567,7 +600,12 @@ fun BookListItem(
                     if (isSelectionMode) {
                         onToggleSelection()
                     } else {
-                        viewModel.downloadAndOpenBook(context, book, onOpenBook)
+                        if (book.isAudiobook) {
+                            viewModel.playAudiobook(context, book)
+                            onPlayAudiobook()
+                        } else {
+                            viewModel.downloadAndOpenBook(context, book, onOpenBook)
+                        }
                     }
                 },
                 onLongClick = {
@@ -592,6 +630,23 @@ fun BookListItem(
                     .clip(RoundedCornerShape(4.dp)),
                 contentScale = ContentScale.Crop
             )
+
+            if (book.isAudiobook) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(4.dp)
+                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
+                        .padding(2.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Headphones,
+                        contentDescription = "Audiobook",
+                        tint = Color.White,
+                        modifier = Modifier.size(12.dp)
+                    )
+                }
+            }
             if (isSelectionMode) {
                 IconButton(onClick = onToggleSelection) {
                     Icon(

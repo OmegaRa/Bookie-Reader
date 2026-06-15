@@ -2,10 +2,12 @@ package com.example.bookiereader.network
 
 import com.example.bookiereader.data.BookResponse
 import com.example.bookiereader.data.LoginRequest
+import com.example.bookiereader.data.ProgressRequest
 import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.POST
+import retrofit2.http.Path
 
 interface ApiService {
     @POST("auth/login") // Relative to /api, this becomes /api/auth/login
@@ -16,4 +18,10 @@ interface ApiService {
         @retrofit2.http.Query("page") page: Int = 1,
         @retrofit2.http.Query("per_page") perPage: Int = 100
     ): BookResponse
+
+    @POST("books/{id}/progress")
+    suspend fun saveProgress(
+        @Path("id") id: Int,
+        @Body request: ProgressRequest
+    ): Response<Unit>
 }

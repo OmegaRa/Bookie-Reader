@@ -14,5 +14,13 @@ data class LocalBookEntity(
     val seriesOrder: Double? = null,
     val tags: String? = null, // Stored as comma-separated string
     val lastPageIndex: Int = 0,
-    val progress: Float? = null
+    val progress: Float? = null,
+    
+    // Audiobook fields
+    val isAudiobook: Boolean = false,
+    val duration: Int? = null,
+    val narrator: String? = null,
+    val audioFormat: String? = null,
+    val chapters: String? = null,
+    val progressLocation: String? = null
 )

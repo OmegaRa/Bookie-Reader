@@ -139,7 +139,12 @@ fun SettingsScreen(viewModel: BookViewModel, onBack: () -> Unit) {
                 
                 Surface(
                     onClick = { 
-                        launcher.launch(arrayOf("application/epub+zip", "application/pdf"))
+                        launcher.launch(arrayOf(
+                            "application/epub+zip",
+                            "application/pdf",
+                            "application/x-mobipocket-ebook",
+                            "application/octet-stream"
+                        ))
                     },
                     color = colorScheme.surface,
                     shape = RoundedCornerShape(12.dp),

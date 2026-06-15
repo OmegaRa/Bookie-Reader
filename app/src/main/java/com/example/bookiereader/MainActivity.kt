@@ -109,6 +109,9 @@ class MainActivity : FragmentActivity() {
                                 onOpenBook = {
                                     navController.navigate("reader")
                                 },
+                                onPlayAudiobook = {
+                                    navController.navigate("audioPlayer")
+                                },
                                 onLogout = {
                                     viewModel.logout {
                                         navController.navigate("login") {
@@ -131,6 +134,14 @@ class MainActivity : FragmentActivity() {
                         }
                         composable("reader") {
                             ReaderScreen(
+                                viewModel = viewModel,
+                                onBack = {
+                                    navController.popBackStack()
+                                }
+                            )
+                        }
+                        composable("audioPlayer") {
+                            AudioPlayerScreen(
                                 viewModel = viewModel,
                                 onBack = {
                                     navController.popBackStack()
