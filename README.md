@@ -1,11 +1,12 @@
 # Bookie Reader 📚
 
-Bookie Reader is a modern, lightweight, and feature-rich Android e-book reader built with Jetpack Compose. It supports a variety of formats including EPUB, PDF, MOBI, and AZW3, and offers a seamless reading experience with both local and server-based library management.
+Bookie Reader is a modern, lightweight, and feature-rich Android e-book and audiobook reader built with Jetpack Compose. It supports a variety of formats including EPUB, PDF, MOBI, and AZW3, and offers a seamless reading and listening experience with both local and server-based library management.
 
 ## ✨ Features
 
 - **Multi-format Support:** Seamlessly read EPUB, PDF, MOBI, and AZW3 files.
-- **Server Sync:** Connect to your personal Bookie server to access your entire library.
+- **Audiobook Playback:** Built-in audiobook player supporting chapter navigation, narrator metadata, customizable playback speed (0.5x to 2.0x), and quick seek skipping.
+- **Server Sync & Progress Saving:** Connect to your personal Bookie or Bookie-Plus server to sync both reading and audiobook listening progress.
 - **Local Import:** Add books directly from your device's storage.
 - **Customizable Reading Experience:**
   - Adjustable font sizes.
