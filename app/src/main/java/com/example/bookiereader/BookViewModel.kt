@@ -712,7 +712,12 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                 
                 // GitHub "latest" releases can use tag_name or name for the version string
                 // Depending on how the release was created. Some use "latest" as tag and "v1.1.4" as name.
-                val latestVersion = (latestRelease.name ?: latestRelease.tag_name).removePrefix("v")
+                val rawVersion = latestRelease.name ?: latestRelease.tag_name
+                val latestVersion = if (rawVersion.startsWith("v", ignoreCase = true)) {
+                    rawVersion.substring(1)
+                } else {
+                    rawVersion
+                }
                 
                 if (isNewerVersion(BuildConfig.VERSION_NAME, latestVersion)) {
                     isUpdateAvailable = true
