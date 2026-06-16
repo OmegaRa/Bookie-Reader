@@ -52,7 +52,7 @@
     <string name="import_books_desc">Add EPUB, PDF, MOBI, or AZW3 files from your device</string>
     <string name="about_header">About</string>
     <string name="version_label">Version</string>
-    <string name="version_value">1.2.2</string>
+    <string name="version_value">1.2.3</string>
     <string name="select_theme_title">Select Theme</string>
     <string name="theme_light">Light</string>
     <string name="theme_dark">Dark</string>
