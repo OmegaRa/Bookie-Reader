@@ -283,8 +283,13 @@ fun BookListScreen(
                             "Tag" to R.string.sort_by_tag,
                             "Type" to R.string.sort_by_type
                         ).forEach { (option, labelRes) ->
+                            val label = if (option == "Type" && viewModel.sortBy == "Type") {
+                                stringResource(labelRes) + if (viewModel.isTypeAscending) " ↑" else " ↓"
+                            } else {
+                                stringResource(labelRes)
+                            }
                             DropdownMenuItem(
-                                text = { Text(stringResource(labelRes), color = if (viewModel.sortBy == option) accentColor else colorScheme.onSurface) },
+                                text = { Text(label, color = if (viewModel.sortBy == option) accentColor else colorScheme.onSurface) },
                                 onClick = {
                                     viewModel.setSortOrder(option)
                                     showSortMenu = false

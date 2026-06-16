@@ -469,6 +469,8 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
     var readerTheme by mutableStateOf(prefs.getString("reader_theme", "System") ?: "System")
     var readerScrollMode by mutableStateOf(prefs.getString("reader_scroll_mode", "Horizontal") ?: "Horizontal")
     var sortBy by mutableStateOf(prefs.getString("sort_by", "Author") ?: "Author")
+    var isTypeAscending by mutableStateOf(prefs.getBoolean("is_type_ascending", true))
+        private set
     var searchQuery by mutableStateOf("")
     var selectedTag by mutableStateOf<String?>(null)
 
@@ -672,7 +674,13 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                 "Author" -> filtered.sortedBy { it.author?.lowercase() ?: "" }
                 "Series" -> filtered.sortedBy { "${it.series?.lowercase() ?: "zzz"}${it.seriesOrder ?: 0.0}" }
                 "Tag" -> filtered.sortedWith(compareBy<Book> { it.tags?.firstOrNull()?.lowercase() ?: "zzz" }.thenBy { it.title.lowercase() })
-                "Type" -> filtered.sortedWith(compareBy<Book> { it.isAudiobook }.thenBy { it.title.lowercase() })
+                "Type" -> {
+                    if (isTypeAscending) {
+                        filtered.sortedWith(compareBy<Book> { it.isAudiobook }.thenBy { it.title.lowercase() })
+                    } else {
+                        filtered.sortedWith(compareByDescending<Book> { it.isAudiobook }.thenBy { it.title.lowercase() })
+                    }
+                }
                 else -> filtered.sortedBy { it.author?.lowercase() ?: "" }
             }
         }
@@ -984,6 +992,15 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setSortOrder(order: String) {
+        if (order == "Type") {
+            if (sortBy == "Type") {
+                isTypeAscending = !isTypeAscending
+                prefs.edit { putBoolean("is_type_ascending", isTypeAscending) }
+            } else {
+                isTypeAscending = true
+                prefs.edit { putBoolean("is_type_ascending", true) }
+            }
+        }
         sortBy = order
         prefs.edit { putString("sort_by", order) }
     }
