@@ -672,6 +672,7 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                 "Author" -> filtered.sortedBy { it.author?.lowercase() ?: "" }
                 "Series" -> filtered.sortedBy { "${it.series?.lowercase() ?: "zzz"}${it.seriesOrder ?: 0.0}" }
                 "Tag" -> filtered.sortedWith(compareBy<Book> { it.tags?.firstOrNull()?.lowercase() ?: "zzz" }.thenBy { it.title.lowercase() })
+                "Type" -> filtered.sortedWith(compareBy<Book> { it.isAudiobook }.thenBy { it.title.lowercase() })
                 else -> filtered.sortedBy { it.author?.lowercase() ?: "" }
             }
         }

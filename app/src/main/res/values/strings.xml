@@ -22,6 +22,7 @@
     <string name="sort_by_author">Author</string>
     <string name="sort_by_series">Series</string>
     <string name="sort_by_tag">Tag</string>
+    <string name="sort_by_type">Type</string>
     <string name="book_of_series">Book %1$s of %2$s</string>
     <string name="unknown_author">Unknown Author</string>
     <string name="error_no_records_mobi">No records found in the MOBI file.</string>

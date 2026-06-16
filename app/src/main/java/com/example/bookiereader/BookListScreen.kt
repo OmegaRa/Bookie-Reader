@@ -280,7 +280,8 @@ fun BookListScreen(
                             "Title" to R.string.sort_by_title,
                             "Author" to R.string.sort_by_author,
                             "Series" to R.string.sort_by_series,
-                            "Tag" to R.string.sort_by_tag
+                            "Tag" to R.string.sort_by_tag,
+                            "Type" to R.string.sort_by_type
                         ).forEach { (option, labelRes) ->
                             DropdownMenuItem(
                                 text = { Text(stringResource(labelRes), color = if (viewModel.sortBy == option) accentColor else colorScheme.onSurface) },
