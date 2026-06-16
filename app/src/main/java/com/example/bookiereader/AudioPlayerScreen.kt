@@ -164,31 +164,44 @@ fun AudioPlayerScreen(
             Spacer(modifier = Modifier.height(24.dp))
 
             // Chapter Info
-            if (viewModel.audioChapters.isNotEmpty()) {
-                val currentChapter = viewModel.audioChapters.getOrNull(viewModel.currentAudioChapterIndex)
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable { showChapterDialog = true }
-                        .background(colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Default.MenuBook, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = currentChapter?.title ?: stringResource(R.string.select_chapter),
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = colorScheme.primary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .then(
+                        if (viewModel.audioChapters.isNotEmpty()) {
+                            Modifier.clickable { showChapterDialog = true }
+                                    .background(colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                        } else {
+                            Modifier.background(colorScheme.surfaceVariant.copy(alpha = 0.2f))
+                        }
                     )
-                    Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.MenuBook, 
+                    contentDescription = null, 
+                    modifier = Modifier.size(16.dp),
+                    tint = if (viewModel.audioChapters.isNotEmpty()) colorScheme.primary else colorScheme.onSurface.copy(alpha = 0.4f)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (viewModel.audioChapters.isNotEmpty()) {
+                        val currentChapter = viewModel.audioChapters.getOrNull(viewModel.currentAudioChapterIndex)
+                        currentChapter?.title ?: stringResource(R.string.select_chapter)
+                    } else {
+                        stringResource(R.string.no_chapters_found)
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (viewModel.audioChapters.isNotEmpty()) colorScheme.primary else colorScheme.onSurface.copy(alpha = 0.4f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                if (viewModel.audioChapters.isNotEmpty()) {
+                    Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = colorScheme.primary)
                 }
-            } else {
-                Spacer(modifier = Modifier.height(36.dp))
             }
 
             Spacer(modifier = Modifier.height(16.dp))

@@ -122,5 +122,6 @@
     <string name="play">Play</string>
     <string name="stop">Stop</string>
     <string name="chapters_title">Chapters</string>
+    <string name="no_chapters_found">No chapters available</string>
     <string name="playback_speed_title">Playback Speed</string>
 </resources>
