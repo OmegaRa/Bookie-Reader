@@ -133,15 +133,26 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
         val headers = mutableMapOf<String, String>()
         getSavedSessionCookie()?.let { headers["Cookie"] = it }
 
-        val downloadUrl = if (book.id < 0) book.downloadUrl else "${baseUrl}books/${book.id}/download"
+        val localEntity = downloadedBookIds.contains(book.id)
+        val localFile = if (book.id < 0) {
+            File(book.downloadUrl)
+        } else if (localEntity) {
+            val entity = localBooks.find { it.id == book.id }
+            if (entity != null) File(entity.downloadUrl) else null
+        } else null
 
         val mp = android.media.MediaPlayer()
         mediaPlayer = mp
 
         try {
-            if (book.id < 0) {
-                mp.setDataSource(context, Uri.fromFile(File(downloadUrl)))
+            if (localFile != null && localFile.exists()) {
+                mp.setDataSource(context, Uri.fromFile(localFile))
             } else {
+                if (book.id < 0) {
+                    errorMessage = app.getString(R.string.error_file_not_found)
+                    return
+                }
+                val downloadUrl = "${baseUrl}books/${book.id}/download"
                 mp.setDataSource(context, Uri.parse(downloadUrl), headers)
             }
             
@@ -382,6 +393,13 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
 
     var localBooks by mutableStateOf<List<Book>>(emptyList())
         private set
+
+    val downloadedBookIds: Set<Int>
+        get() = localBooks.map { it.id }.toSet()
+
+    var filterDownloadedOnly by mutableStateOf(false)
+
+    val downloadingBookIds = mutableStateMapOf<Int, Boolean>()
 
     var isLoading by mutableStateOf(false)
         private set
@@ -656,7 +674,17 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
 
     val filteredBooks: List<Book>
         get() {
-            val all = (books + localBooks)
+            // If remote books were fetched, server books and local books could both have books with id > 0
+            // De-duplicate by ID, prioritizing localBooks (which have local filePath and local metadata)
+            val allMap = LinkedHashMap<Int, Book>()
+            for (b in books) {
+                allMap[b.id] = b
+            }
+            for (b in localBooks) {
+                allMap[b.id] = b
+            }
+            val all = allMap.values.toList()
+
             val filtered = all.filter { book ->
                 val matchesSearch = searchQuery.isEmpty() || 
                     book.title.contains(searchQuery, ignoreCase = true) ||
@@ -665,8 +693,9 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                     (book.tags?.any { it.contains(searchQuery, ignoreCase = true) } ?: false)
                 
                 val matchesTag = selectedTag == null || (book.tags?.contains(selectedTag) ?: false)
+                val matchesDownloaded = !filterDownloadedOnly || isBookDownloaded(book.id)
                 
-                matchesSearch && matchesTag
+                matchesSearch && matchesTag && matchesDownloaded
             }
             
             return when (sortBy) {
@@ -743,22 +772,42 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
         return false
     }
 
+    fun isBookDownloaded(bookId: Int): Boolean {
+        if (bookId < 0) return true
+        val localBook = localBooks.find { it.id == bookId } ?: return false
+        val file = File(localBook.downloadUrl)
+        return file.exists()
+    }
+
+    fun getLocalBookCover(bookId: Int): File? {
+        val coversDir = File(app.filesDir, "covers")
+        val coverFile = File(coversDir, "cover_$bookId.jpg")
+        return if (coverFile.exists()) coverFile else null
+    }
+
     private fun loadLocalBooks() {
         viewModelScope.launch {
             val entities = localBookDao.getAllBooks()
             localBooks = entities.map { entity ->
                 val savedProgress = prefs.getFloat("book_progress_${entity.id}", -1f)
+                val localCover = getLocalBookCover(entity.id)
                 Book(
                     id = entity.id,
                     title = entity.title,
                     author = entity.author,
                     format = entity.format,
                     downloadUrl = entity.filePath,
-                    coverUrl = null,
+                    coverUrl = localCover?.absolutePath,
                     series = entity.series,
                     seriesOrder = entity.seriesOrder,
                     tags = entity.tags?.split(",")?.filter { it.isNotBlank() },
-                    progress = if (savedProgress >= 0f) savedProgress else entity.progress
+                    progress = if (savedProgress >= 0f) savedProgress else entity.progress,
+                    isAudiobook = entity.isAudiobook,
+                    duration = entity.duration,
+                    narrator = entity.narrator,
+                    audioFormat = entity.audioFormat,
+                    chapters = entity.chapters,
+                    progressLocation = entity.progressLocation
                 )
             }
         }
@@ -1425,13 +1474,36 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
         currentBook = null
         currentBookFile = null
 
+        // Check if book is local (negative ID) or downloaded server book
         if (book.id < 0) {
-            currentBook = book
-            currentBookFile = File(book.downloadUrl)
-            onReady()
+            val file = File(book.downloadUrl)
+            if (file.exists()) {
+                currentBook = book
+                currentBookFile = file
+                onReady()
+                return
+            } else {
+                errorMessage = app.getString(R.string.error_file_not_found)
+                return
+            }
+        }
+
+        val downloadedLocal = localBooks.find { it.id == book.id }
+        if (downloadedLocal != null) {
+            val localFile = File(downloadedLocal.downloadUrl)
+            if (localFile.exists()) {
+                currentBook = book
+                currentBookFile = localFile
+                onReady()
+                return
+            }
+        }
+
+        val client = okHttpClient
+        if (client == null) {
+            errorMessage = app.getString(R.string.book_not_downloaded_offline)
             return
         }
-        val client = okHttpClient ?: return
         val downloadUrl = "${baseUrl}books/${book.id}/download"
         
         viewModelScope.launch {
@@ -1457,6 +1529,117 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                 errorMessage = app.getString(R.string.download_error)
             } finally {
                 isLoading = false
+            }
+        }
+    }
+
+    fun downloadBookForOffline(book: Book) {
+        val client = okHttpClient ?: return
+        if (book.id < 0 || isBookDownloaded(book.id)) return
+
+        downloadingBookIds[book.id] = true
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val downloadsDir = File(app.filesDir, "downloads").apply { if (!exists()) mkdirs() }
+                val coversDir = File(app.filesDir, "covers").apply { if (!exists()) mkdirs() }
+
+                val extension = if (book.isAudiobook) {
+                    book.audioFormat ?: book.format.ifEmpty { "mp3" }
+                } else {
+                    book.format.ifEmpty { "epub" }
+                }
+                val destFile = File(downloadsDir, "book_${book.id}.$extension")
+
+                // Download book file
+                val downloadUrl = "${baseUrl}books/${book.id}/download"
+                val request = Request.Builder().url(downloadUrl).build()
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) throw Exception("Failed to download book: ${response.code}")
+                    val body = response.body ?: throw Exception("Empty book body")
+                    body.byteStream().use { input ->
+                        FileOutputStream(destFile).use { output -> input.copyTo(output) }
+                    }
+                }
+
+                // Download cover if present
+                var coverPath: String? = null
+                val coverUrl = "${baseUrl}books/${book.id}/cover"
+                try {
+                    val coverReq = Request.Builder().url(coverUrl).build()
+                    client.newCall(coverReq).execute().use { response ->
+                        if (response.isSuccessful) {
+                            val body = response.body
+                            if (body != null) {
+                                val coverDest = File(coversDir, "cover_${book.id}.jpg")
+                                body.byteStream().use { input ->
+                                    FileOutputStream(coverDest).use { output -> input.copyTo(output) }
+                                }
+                                coverPath = coverDest.absolutePath
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w("BookViewModel", "Failed to cache cover for book ${book.id}", e)
+                }
+
+                val entity = LocalBookEntity(
+                    id = book.id,
+                    title = book.title,
+                    author = book.author,
+                    format = book.format,
+                    filePath = destFile.absolutePath,
+                    series = book.series,
+                    seriesOrder = book.seriesOrder,
+                    tags = book.tags?.joinToString(","),
+                    progress = book.progress,
+                    isAudiobook = book.isAudiobook,
+                    duration = book.duration,
+                    narrator = book.narrator,
+                    audioFormat = book.audioFormat,
+                    chapters = book.chapters,
+                    progressLocation = book.progressLocation,
+                    coverPath = coverPath
+                )
+
+                localBookDao.insertBook(entity)
+
+                val localBook = book.copy(
+                    downloadUrl = destFile.absolutePath,
+                    coverUrl = coverPath
+                )
+
+                withContext(Dispatchers.Main) {
+                    localBooks = localBooks.filter { it.id != book.id } + localBook
+                }
+            } catch (e: Exception) {
+                Log.e("BookViewModel", "Error downloading book ${book.id}", e)
+                withContext(Dispatchers.Main) {
+                    errorMessage = app.getString(R.string.download_error, e.localizedMessage ?: "")
+                }
+            } finally {
+                withContext(Dispatchers.Main) {
+                    downloadingBookIds.remove(book.id)
+                }
+            }
+        }
+    }
+
+    fun removeBookDownload(book: Book) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val localBook = localBooks.find { it.id == book.id }
+            if (localBook != null) {
+                localBookDao.deleteBookById(book.id)
+                val bookFile = File(localBook.downloadUrl)
+                if (bookFile.exists()) {
+                    bookFile.delete()
+                }
+                val coverFile = File(app.filesDir, "covers/cover_${book.id}.jpg")
+                if (coverFile.exists()) {
+                    coverFile.delete()
+                }
+                withContext(Dispatchers.Main) {
+                    localBooks = localBooks.filter { it.id != book.id }
+                }
             }
         }
     }
@@ -1578,6 +1761,8 @@ class BookViewModel(application: Application) : AndroidViewModel(application) {
                     localBooks = localBooks.filter { it.id != book.id }
                 }
             } else {
+                // Remove local download if any exists
+                removeBookDownload(book)
                 withContext(Dispatchers.Main) {
                     books = books.filter { it.id != book.id }
                 }

@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Update
 import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -316,14 +317,38 @@ fun BookListScreen(
                 }
             }
 
-            // Tag Chips
+            // Downloaded & Tag Filter Chips
             val tags = listOf(stringResource(R.string.all_tags)) + viewModel.allTags
-            if (tags.size > 1) {
-                androidx.compose.foundation.lazy.LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.padding(bottom = 8.dp)
-                ) {
+            androidx.compose.foundation.lazy.LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(bottom = 8.dp)
+            ) {
+                item {
+                    FilterChip(
+                        selected = viewModel.filterDownloadedOnly,
+                        onClick = { viewModel.filterDownloadedOnly = !viewModel.filterDownloadedOnly },
+                        label = { Text(stringResource(R.string.filter_downloaded)) },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.Check,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = colorScheme.surface,
+                            labelColor = colorScheme.onSurface.copy(alpha = 0.6f),
+                            iconColor = colorScheme.onSurface.copy(alpha = 0.6f),
+                            selectedContainerColor = accentColor.copy(alpha = 0.2f),
+                            selectedLabelColor = accentColor,
+                            selectedLeadingIconColor = accentColor
+                        ),
+                        border = null
+                    )
+                }
+
+                if (tags.size > 1) {
                     items(tags) { tag ->
                         val isAll = tag == stringResource(R.string.all_tags)
                         FilterChip(
@@ -419,9 +444,14 @@ fun BookGridItem(
     val application = LocalContext.current.applicationContext as BookieReaderApplication
     val imageLoader = application.imageLoader
     
-    // The baseUrl usually ends in "/api/", and cover is at /api/books/{id}/cover
-    val coverUrl = viewModel.baseUrl + "books/" + book.id + "/cover" + 
-        if (viewModel.sessionCacheBuster.isNotEmpty()) "?v=${viewModel.sessionCacheBuster}" else ""
+    // Check if downloaded locally
+    val isDownloaded = viewModel.isBookDownloaded(book.id)
+    val isDownloading = viewModel.downloadingBookIds[book.id] == true
+    val localCover = if (isDownloaded) viewModel.getLocalBookCover(book.id) else null
+
+    // If local cover exists, use it; otherwise use network coverUrl
+    val coverModel = localCover ?: (viewModel.baseUrl + "books/" + book.id + "/cover" + 
+        if (viewModel.sessionCacheBuster.isNotEmpty()) "?v=${viewModel.sessionCacheBuster}" else "")
     
     Column(
         modifier = Modifier
@@ -451,7 +481,7 @@ fun BookGridItem(
         Box {
             AsyncImage(
                 model = ImageRequest.Builder(context)
-                    .data(coverUrl)
+                    .data(coverModel)
                     .crossfade(true)
                     .build(),
                 imageLoader = imageLoader,
@@ -463,19 +493,54 @@ fun BookGridItem(
                 contentScale = ContentScale.Crop
             )
 
-            if (book.isAudiobook) {
+            // Badges at bottom of cover
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                if (isDownloaded) {
+                    Box(
+                        modifier = Modifier
+                            .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
+                            .padding(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = stringResource(R.string.downloaded),
+                            tint = Color.White,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+                if (book.isAudiobook) {
+                    Box(
+                        modifier = Modifier
+                            .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
+                            .padding(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Headphones,
+                            contentDescription = "Audiobook",
+                            tint = Color.White,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            }
+
+            if (isDownloading) {
                 Box(
                     modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(8.dp)
-                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
-                        .padding(4.dp)
+                        .matchParentSize()
+                        .background(Color.Black.copy(alpha = 0.5f)),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Headphones,
-                        contentDescription = "Audiobook",
-                        tint = Color.White,
-                        modifier = Modifier.size(16.dp)
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(32.dp),
+                        color = Color.White,
+                        strokeWidth = 3.dp
                     )
                 }
             }
@@ -521,6 +586,26 @@ fun BookGridItem(
                                 onToggleSelection()
                             }
                         )
+                        if (book.id > 0) {
+                            if (isDownloaded) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.delete_download), color = colorScheme.onSurface) },
+                                    onClick = {
+                                        showMenu = false
+                                        viewModel.removeBookDownload(book)
+                                    }
+                                )
+                            } else {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.download), color = colorScheme.onSurface) },
+                                    enabled = !isDownloading,
+                                    onClick = {
+                                        showMenu = false
+                                        viewModel.downloadBookForOffline(book)
+                                    }
+                                )
+                            }
+                        }
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.delete), color = Color.Red) },
                             onClick = {
@@ -588,13 +673,16 @@ fun BookListItem(
     val colorScheme = MaterialTheme.colorScheme
     val accentColor = colorScheme.primary
     var showMenu by remember { mutableStateOf(false) }
-    
+
+    val isDownloaded = viewModel.isBookDownloaded(book.id)
+    val isDownloading = viewModel.downloadingBookIds[book.id] == true
+    val localCover = if (isDownloaded) viewModel.getLocalBookCover(book.id) else null
+
     val application = LocalContext.current.applicationContext as BookieReaderApplication
     val imageLoader = application.imageLoader
     
-    // The baseUrl usually ends in "/api/", and cover is at /api/books/{id}/cover
-    val coverUrl = viewModel.baseUrl + "books/" + book.id + "/cover" +
-        if (viewModel.sessionCacheBuster.isNotEmpty()) "?v=${viewModel.sessionCacheBuster}" else ""
+    val coverModel = localCover ?: (viewModel.baseUrl + "books/" + book.id + "/cover" + 
+        if (viewModel.sessionCacheBuster.isNotEmpty()) "?v=${viewModel.sessionCacheBuster}" else "")
     
     Row(
         modifier = Modifier
@@ -626,7 +714,7 @@ fun BookListItem(
         Box(contentAlignment = Alignment.Center) {
             AsyncImage(
                 model = ImageRequest.Builder(context)
-                    .data(coverUrl)
+                    .data(coverModel)
                     .crossfade(true)
                     .build(),
                 imageLoader = imageLoader,
@@ -637,22 +725,57 @@ fun BookListItem(
                 contentScale = ContentScale.Crop
             )
 
-            if (book.isAudiobook) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(2.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                if (isDownloaded) {
+                    Box(
+                        modifier = Modifier
+                            .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
+                            .padding(2.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = stringResource(R.string.downloaded),
+                            tint = Color.White,
+                            modifier = Modifier.size(12.dp)
+                        )
+                    }
+                }
+                if (book.isAudiobook) {
+                    Box(
+                        modifier = Modifier
+                            .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
+                            .padding(2.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Headphones,
+                            contentDescription = "Audiobook",
+                            tint = Color.White,
+                            modifier = Modifier.size(12.dp)
+                        )
+                    }
+                }
+            }
+
+            if (isDownloading) {
                 Box(
                     modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(4.dp)
-                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
-                        .padding(2.dp)
+                        .matchParentSize()
+                        .background(Color.Black.copy(alpha = 0.5f)),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Headphones,
-                        contentDescription = "Audiobook",
-                        tint = Color.White,
-                        modifier = Modifier.size(12.dp)
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        color = Color.White,
+                        strokeWidth = 2.dp
                     )
                 }
             }
+
             if (isSelectionMode) {
                 IconButton(onClick = onToggleSelection) {
                     Icon(
@@ -724,6 +847,26 @@ fun BookListItem(
                         onToggleSelection()
                     }
                 )
+                if (book.id > 0) {
+                    if (isDownloaded) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.delete_download), color = colorScheme.onSurface) },
+                            onClick = {
+                                showMenu = false
+                                viewModel.removeBookDownload(book)
+                            }
+                        )
+                    } else {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.download), color = colorScheme.onSurface) },
+                            enabled = !isDownloading,
+                            onClick = {
+                                showMenu = false
+                                viewModel.downloadBookForOffline(book)
+                            }
+                        )
+                    }
+                }
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.delete), color = Color.Red) },
                     onClick = {

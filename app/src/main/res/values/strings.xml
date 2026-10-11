@@ -112,6 +112,14 @@
     <string name="error_failed_to_extract">Failed to extract book.</string>
     <string name="error_unsupported_file">Unsupported file type.</string>
 
+    <string name="download">Download</string>
+    <string name="delete_download">Remove Download</string>
+    <string name="filter_downloaded">Downloaded</string>
+    <string name="downloaded">Downloaded</string>
+    <string name="downloading_book">Downloading %1$s…</string>
+    <string name="download_completed">%1$s downloaded</string>
+    <string name="book_not_downloaded_offline">This book is not downloaded for offline reading.</string>
+
     <!-- Audiobook Player -->
     <string name="now_playing">Now Playing</string>
     <string name="narrated_by">Narrated by %1$s</string>

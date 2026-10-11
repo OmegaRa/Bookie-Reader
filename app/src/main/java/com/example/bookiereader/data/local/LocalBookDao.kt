@@ -11,11 +11,17 @@ interface LocalBookDao {
     @Query("SELECT * FROM local_books")
     suspend fun getAllBooks(): List<LocalBookEntity>
 
+    @Query("SELECT * FROM local_books WHERE id = :bookId LIMIT 1")
+    suspend fun getBookById(bookId: Int): LocalBookEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertBook(book: LocalBookEntity)
 
     @Delete
     suspend fun deleteBook(book: LocalBookEntity)
+
+    @Query("DELETE FROM local_books WHERE id = :bookId")
+    suspend fun deleteBookById(bookId: Int)
 
     @Query("UPDATE local_books SET progress = :progress WHERE id = :bookId")
     suspend fun updateProgress(bookId: Int, progress: Float)

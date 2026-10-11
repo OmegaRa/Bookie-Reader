@@ -22,5 +22,6 @@ data class LocalBookEntity(
     val narrator: String? = null,
     val audioFormat: String? = null,
     val chapters: String? = null,
-    val progressLocation: String? = null
+    val progressLocation: String? = null,
+    val coverPath: String? = null
 )
